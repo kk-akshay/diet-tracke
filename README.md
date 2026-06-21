@@ -1,36 +1,40 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# MacroSync Engine 🚀
 
-## Getting Started
+A streamlined, type-safe Next.js application built to track and optimize daily nutrition across contrasting target profiles simultaneously. Designed specifically to manage an underweight weight-gain profile (3000 kcal target) alongside shared roommate weight-loss profiles (2800 kcal target) seamlessly from a single terminal interface.
 
-First, run the development server:
+---
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+## ⚡ Core Features
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+* **Dual-Profile Orchestration:** Switch cleanly between the **Gain track (3000 kcal)** and **Loss track (2800 kcal)** with active runtime adjustments.
+* **Dynamic Calorie Gauge:** Displays current totals against target ceilings, automatically calculating precise remaining balances or overshoot margins.
+* **4-Stage Day Logs:** Structures data into specific intake windows: *Breakfast*, *Lunch*, *Evening Snack*, and *Dinner*.
+* **Adaptive Theme Engine:** Features a full Light/Dark mode switcher to resolve ambient visibility issues and prevent text clipping or contrast failures.
+* **Local Persistence Layer:** Zero database overhead. All historical logs, macro counts, and tracking dates persist securely inside the browser's `localStorage`.
+* **Custom Food Factory:** Define unique custom ingredients with specific macro profiles (Protein, Carbs, Fat, Fiber) to supplement the predefined catalog instantly.
+* **Habit Tracker & Weight Logger:** Checkboxes for crucial daily benchmarks (*Daily Walk*, *Exercise*, *Sugar Cut*) combined with regular weight monitoring inputs.
+* **Master Excel Export Engine:** Compiles complete multi-profile timelines directly into Excel-ready, cleanly separated `.csv` datasets with one click.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+---
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 🛠️ Built With
 
-## Learn More
+* **Framework:** [Next.js 14+](https://nextjs.org/) (App Router architecture)
+* **Styling:** [Tailwind CSS](https://tailwindcss.com/)
+* **Language:** [TypeScript](https://www.typescriptlang.org/) (Enforces rigid type definitions for food logs and data structure integrity)
+* **Storage Backend:** Client-Side Web Storage API (`localStorage`)
 
-To learn more about Next.js, take a look at the following resources:
+---
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 📦 Project Structure
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```text
+├── src/
+│   ├── app/
+│   │   ├── layout.tsx     # Application global wrappers and viewport settings
+│   │   ├── page.tsx       # Core dashboard, state logic, and UI interface
+│   │   └── globals.css    # Tailwind base directives
+│   ├── data/
+│   │   └── fixedFoods.ts  # Predefined food metrics baseline array
+│   └── types/
+│       └── diet.ts        # Typed object interfaces for logs, meals, and macros
