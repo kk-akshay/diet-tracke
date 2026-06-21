@@ -38,3 +38,4 @@ A streamlined, type-safe Next.js application built to track and optimize daily n
 │   │   └── fixedFoods.ts  # Predefined food metrics baseline array
 │   └── types/
 │       └── diet.ts        # Typed object interfaces for logs, meals, and macros
+contact me at akshaykkashokan@gmail.com
