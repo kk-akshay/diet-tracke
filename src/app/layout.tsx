@@ -5,8 +5,8 @@ import { Inter } from 'next/font/google';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata = {
-  title: 'Macros Daily',
-  description: 'Simple and effective macro tracker',
+  title: 'Macros daily',
+  description: 'Simple, effective multi-user nutrition and macro monitoring platform',
 };
 
 export default function RootLayout({

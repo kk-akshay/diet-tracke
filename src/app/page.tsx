@@ -3,7 +3,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { FIXED_FOODS } from '../data/fixedFoods';
-import { FoodItem, MealTime, LoggedFood, HistoricalLogs, DayLog } from '../types/diet';
+import { FoodItem, MealTime, LoggedFood, DayLog, UserProfileData, MultiUserStorage } from '../types/diet';
 
 const INITIAL_DAY_LOG = (): DayLog => ({
   weight: '',
@@ -11,119 +11,288 @@ const INITIAL_DAY_LOG = (): DayLog => ({
   habits: { walk: false, exercise: false, sugarCut: false }
 });
 
-export default function DietTracker() {
-  // Application Configurations
-  const profiles = [
-    { id: 'akshay' as const, name: 'Gain', target: 3000 },
-    { id: 'roommates' as const, name: 'Loss', target: 2800 }
-  ];
+function getWeekMonday(dateStr: string): string {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  const day = d.getDay();
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+  const monday = new Date(d.setDate(diff));
+  return monday.toISOString().split('T')[0];
+}
 
-  // State Management
-  const [activeProfile, setActiveProfile] = useState<'akshay' | 'roommates'>('akshay');
+export default function MultiUserDietTracker() {
+  // Global Engine States
+  const [db, setDb] = useState<MultiUserStorage>({});
+  const [currentUser, setCurrentUser] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string>('');
-  const [logs, setLogs] = useState<HistoricalLogs>({});
-  const [mounted, setMounted] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
+  const [mounted, setMounted] = useState(false);
 
-  // Form States
+  // Auth Toggle Switch ('signin' or 'signup')
+  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
+  const [loginUsername, setLoginUsername] = useState('');
+  const [regUsername, setRegUsername] = useState('');
+  
+  // Numeric Inputs allow string empty state to fix standard clearing behavior
+  const [regDefaultTarget, setRegDefaultTarget] = useState<number | ''>(2500);
+
+  // Dashboard Inputs State
   const [customFoods, setCustomFoods] = useState<FoodItem[]>([]);
   const [selectedMealTime, setSelectedMealTime] = useState<MealTime>('Breakfast');
   const [selectedFoodIndex, setSelectedFoodIndex] = useState<number>(0);
-  const [servings, setServings] = useState<number>(1);
+  const [servings, setServings] = useState<number | ''>(1);
+  const [weeklyTargetInput, setWeeklyTargetInput] = useState<number | ''>('');
 
-  // Custom Food Creator State
-  const [newFood, setNewFood] = useState<FoodItem>({
-    name: '', calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0
-  });
+  // Custom Ingredient Creator State (Uses string empty state to clear zeros properly)
+  const [newFoodName, setNewFoodName] = useState('');
+  const [newFoodCal, setNewFoodCal] = useState<number | ''>('');
+  const [newFoodProt, setNewFoodProt] = useState<number | ''>('');
+  const [newFoodCarb, setNewFoodCarb] = useState<number | ''>('');
+  const [newFoodFat, setNewFoodFat] = useState<number | ''>('');
+  const [newFoodFib, setNewFoodFib] = useState<number | ''>('');
 
-  // Handle Hydration and local storage loading
+  // Initialization & Hydration Layer
   useEffect(() => {
-    const today = new Date().toISOString().split('T')[0];
-    setSelectedDate(today);
+    setSelectedDate(new Date().toISOString().split('T')[0]);
     
-    const savedLogs = localStorage.getItem('diet_tracker_logs');
-    const savedCustomFoods = localStorage.getItem('diet_tracker_custom_foods');
-    const savedTheme = localStorage.getItem('diet_tracker_theme');
-    
-    if (savedLogs) setLogs(JSON.parse(savedLogs));
-    if (savedCustomFoods) setCustomFoods(JSON.parse(savedCustomFoods));
+    const savedDb = localStorage.getItem('macrosync_multi_db');
+    const savedCustom = localStorage.getItem('macrosync_custom_foods');
+    const savedTheme = localStorage.getItem('macrosync_theme');
+    const savedSession = localStorage.getItem('macrosync_active_session');
+
+    if (savedDb) setDb(JSON.parse(savedDb));
+    if (savedCustom) setCustomFoods(JSON.parse(savedCustom));
     if (savedTheme) setIsDarkMode(savedTheme === 'dark');
-    
+    if (savedSession) setCurrentUser(savedSession);
+
     setMounted(true);
   }, []);
 
-  // Sync to local storage on mutation
+  // Sync mutations cleanly to client local storage
   useEffect(() => {
-    if (mounted) {
-      localStorage.setItem('diet_tracker_logs', JSON.stringify(logs));
-    }
-  }, [logs, mounted]);
+    if (mounted) localStorage.setItem('macrosync_multi_db', JSON.stringify(db));
+  }, [db, mounted]);
 
   useEffect(() => {
-    if (mounted) {
-      localStorage.setItem('diet_tracker_custom_foods', JSON.stringify(customFoods));
-    }
+    if (mounted) localStorage.setItem('macrosync_custom_foods', JSON.stringify(customFoods));
   }, [customFoods, mounted]);
+
+  // Auth Operations
+  const handleRegister = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanName = regUsername.trim().toLowerCase();
+    if (!cleanName) return;
+    if (db[cleanName]) {
+      alert('Username configuration already allocated.');
+      return;
+    }
+
+    const cleanTarget = regDefaultTarget === '' ? 2000 : Math.max(0, regDefaultTarget);
+
+    const newProfile: UserProfileData = {
+      username: cleanName,
+      defaultTarget: cleanTarget,
+      weeklyTargets: {},
+      logs: {}
+    };
+
+    setDb(prev => ({ ...prev, [cleanName]: newProfile }));
+    setCurrentUser(cleanName);
+    localStorage.setItem('macrosync_active_session', cleanName);
+    setRegUsername('');
+    setRegDefaultTarget(2500);
+  };
+
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanName = loginUsername.trim().toLowerCase();
+    if (db[cleanName]) {
+      setCurrentUser(cleanName);
+      localStorage.setItem('macrosync_active_session', cleanName);
+      setLoginUsername('');
+    } else {
+      alert('Profile context signature not found.');
+    }
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    localStorage.removeItem('macrosync_active_session');
+  };
 
   const toggleTheme = () => {
     const nextTheme = !isDarkMode;
     setIsDarkMode(nextTheme);
-    localStorage.setItem('diet_tracker_theme', nextTheme ? 'dark' : 'light');
+    localStorage.setItem('macrosync_theme', nextTheme ? 'dark' : 'light');
   };
 
-  if (!mounted) return <div className="p-8 text-center text-slate-500">Loading Dashboard Backend...</div>;
+  if (!mounted) return <div className="p-8 text-center text-slate-500">Initializing Database Isolation...</div>;
 
-  // Safe Extraction Layer
-  const currentDayData: DayLog = logs[selectedDate]?.[activeProfile] || INITIAL_DAY_LOG();
-  const currentTarget = profiles.find(p => p.id === activeProfile)?.target || 2000;
+  // Render Modern Login / Sign Up Gate if no active workspace session exists
+  if (!currentUser || !db[currentUser]) {
+    return (
+      <div className={`min-h-screen flex items-center justify-center p-4 transition-colors duration-200 ${isDarkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900'}`}>
+        <div className={`w-full max-w-md p-8 rounded-2xl border shadow-2xl transition-all ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+          
+          {/* Header Branding Row */}
+          <div className="flex justify-between items-center mb-8">
+            <div>
+              <h1 className="text-2xl font-black tracking-tight bg-gradient-to-r from-blue-500 to-emerald-500 bg-clip-text text-transparent">Macros daily</h1>
+              <p className="text-xs text-slate-400 mt-0.5">Nutritional Profile Workspaces</p>
+            </div>
+            <button onClick={toggleTheme} className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-colors ${isDarkMode ? 'bg-slate-800 border-slate-700 text-amber-400' : 'bg-white border-slate-200 text-slate-600'}`}>
+              {isDarkMode ? '☀️ Light' : '🌙 Dark'}
+            </button>
+          </div>
+
+          {/* Tab Navigation Controls */}
+          <div className="grid grid-cols-2 p-1 mb-6 rounded-xl bg-slate-500/10 border border-slate-500/5">
+            <button 
+              onClick={() => setAuthMode('signin')}
+              className={`py-2 text-sm font-bold rounded-lg transition-all ${authMode === 'signin' ? (isDarkMode ? 'bg-slate-800 text-white shadow' : 'bg-white text-blue-600 shadow') : 'text-slate-400'}`}
+            >
+              Sign In
+            </button>
+            <button 
+              onClick={() => setAuthMode('signup')}
+              className={`py-2 text-sm font-bold rounded-lg transition-all ${authMode === 'signup' ? (isDarkMode ? 'bg-slate-800 text-white shadow' : 'bg-white text-emerald-600 shadow') : 'text-slate-400'}`}
+            >
+              Sign Up
+            </button>
+          </div>
+
+          {/* Conditional Input Segment Render Engine */}
+          {authMode === 'signin' ? (
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">Registered Username</label>
+                <input 
+                  type="text" 
+                  required 
+                  placeholder="e.g. akshay"
+                  value={loginUsername}
+                  onChange={(e) => setLoginUsername(e.target.value)}
+                  className={`w-full text-sm rounded-lg p-2.5 border focus:outline-none focus:ring-2 focus:ring-blue-500 ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-200 text-black'}`}
+                />
+              </div>
+              <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm py-2.5 rounded-lg transition-colors shadow-lg shadow-blue-500/10">
+                Access Workspace →
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={handleRegister} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">New Profile Username</label>
+                <input 
+                  type="text" 
+                  required 
+                  placeholder="e.g. akshay"
+                  value={regUsername}
+                  onChange={(e) => setRegUsername(e.target.value)}
+                  className={`w-full text-sm rounded-lg p-2.5 border focus:outline-none focus:ring-2 focus:ring-emerald-500 ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-200 text-black'}`}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">Standard Daily Calories Target</label>
+                <input 
+                  type="number" 
+                  required 
+                  min="0"
+                  placeholder="e.g. 2800"
+                  value={regDefaultTarget}
+                  onChange={(e) => setRegDefaultTarget(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))}
+                  className={`w-full text-sm rounded-lg p-2.5 border focus:outline-none focus:ring-2 focus:ring-emerald-500 ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-200 text-black'}`}
+                />
+              </div>
+              <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm py-2.5 rounded-lg transition-colors shadow-lg shadow-emerald-500/10">
+                Provision Profile Space ✓
+              </button>
+            </form>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Active Context Calculations
+  const userProfile: UserProfileData = db[currentUser];
+  const currentWeekMonday = getWeekMonday(selectedDate);
+  const activeWeeklyTarget = userProfile.weeklyTargets[currentWeekMonday] || userProfile.defaultTarget;
+  const currentDayData: DayLog = userProfile.logs[selectedDate] || INITIAL_DAY_LOG();
   const combinedFoodList = [...FIXED_FOODS, ...customFoods];
 
-  // Helper Mutation Function
-  const updateCurrentLog = (updatedData: Partial<DayLog>) => {
-    setLogs(prev => {
-      const dayData = prev[selectedDate] || { akshay: INITIAL_DAY_LOG(), roommates: INITIAL_DAY_LOG() };
-      return {
-        ...prev,
-        [selectedDate]: {
-          ...dayData,
-          [activeProfile]: { ...dayData[activeProfile], ...updatedData }
-        }
-      };
-    });
+  // Dynamic Multi-User Modifier Mutation Layer
+  const updateProfileData = (updatedLog: Partial<DayLog>) => {
+    const freshLogs = { ...userProfile.logs, [selectedDate]: { ...currentDayData, ...updatedLog } };
+    setDb(prev => ({
+      ...prev,
+      [currentUser]: { ...userProfile, logs: freshLogs }
+    }));
   };
 
-  // Log Food Action
+  const handleSetWeeklyTarget = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanTarget = weeklyTargetInput === '' ? 0 : Math.max(0, weeklyTargetInput);
+    if (cleanTarget <= 0) return;
+
+    setDb(prev => ({
+      ...prev,
+      [currentUser]: {
+        ...userProfile,
+        weeklyTargets: { ...userProfile.weeklyTargets, [currentWeekMonday]: cleanTarget }
+      }
+    }));
+    setWeeklyTargetInput('');
+    alert(`Target for week of ${currentWeekMonday} set to ${cleanTarget} kcal.`);
+  };
+
   const handleAddFood = (e: React.FormEvent) => {
     e.preventDefault();
     const sourceFood = combinedFoodList[selectedFoodIndex];
-    if (!sourceFood) return;
+    const cleanServings = servings === '' ? 1 : Math.max(0, servings);
+    if (!sourceFood || cleanServings <= 0) return;
 
-    const newLoggedItem: LoggedFood = {
+    const loggedItem: LoggedFood = {
       ...sourceFood,
       id: crypto.randomUUID(),
-      servings,
+      servings: cleanServings,
       mealTime: selectedMealTime
     };
 
-    updateCurrentLog({ meals: [...currentDayData.meals, newLoggedItem] });
+    updateProfileData({ meals: [...currentDayData.meals, loggedItem] });
     setServings(1);
   };
 
-  // Create Custom Food Action
   const handleCreateCustomFood = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newFood.name.trim()) return;
-    setCustomFoods(prev => [...prev, newFood]);
-    setNewFood({ name: '', calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
-    alert(`${newFood.name} added to your custom food list options!`);
+    if (!newFoodName.trim()) return;
+
+    const newCustomFood: FoodItem = {
+      name: newFoodName,
+      calories: newFoodCal === '' ? 0 : Math.max(0, newFoodCal),
+      protein: newFoodProt === '' ? 0 : Math.max(0, newFoodProt),
+      carbs: newFoodCarb === '' ? 0 : Math.max(0, newFoodCarb),
+      fat: newFoodFat === '' ? 0 : Math.max(0, newFoodFat),
+      fiber: newFoodFib === '' ? 0 : Math.max(0, newFoodFib)
+    };
+
+    setCustomFoods(prev => [...prev, newCustomFood]);
+    
+    // Reset local states to empty strings cleanly
+    setNewFoodName('');
+    setNewFoodCal('');
+    setNewFoodProt('');
+    setNewFoodCarb('');
+    setNewFoodFat('');
+    setNewFoodFib('');
+    alert(`"${newCustomFood.name}" appended dynamically to food choices.`);
   };
 
-  // Delete Logged Food Item Action
   const handleDeleteLoggedFood = (id: string) => {
-    updateCurrentLog({ meals: currentDayData.meals.filter(m => m.id !== id) });
+    updateProfileData({ meals: currentDayData.meals.filter(m => m.id !== id) });
   };
 
-  // Macro Totals Computations
+  // Computations
   const totals = currentDayData.meals.reduce((acc, item) => {
     acc.calories += item.calories * item.servings;
     acc.protein += item.protein * item.servings;
@@ -133,37 +302,34 @@ export default function DietTracker() {
     return acc;
   }, { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
 
-  const calorieDiff = totals.calories - currentTarget;
+  const calorieDiff = totals.calories - activeWeeklyTarget;
   const isOvershot = calorieDiff > 0;
 
-  // Export Engine to Excel Compatible CSV Format
   const handleExportCSV = () => {
     let csvContent = "data:text/csv;charset=utf-8,";
-    csvContent += "Date,Profile,Logged Weight,Meal Time,Food Name,Servings,Calories,Protein(g),Carbs(g),Fat(g),Fiber(g),Walk Metric,Exercise Metric,Sugar Cut\n";
+    csvContent += "Date,Week Block,Logged Weight,Meal Time,Food Name,Servings,Total Calories,Protein(g),Carbs(g),Fat(g),Fiber(g),Walk Metric,Exercise Metric,Sugar Cut\n";
 
-    Object.keys(logs).sort().forEach(date => {
-      ['akshay', 'roommates'].forEach(profKey => {
-        const logItem = logs[date][profKey as 'akshay' | 'roommates'];
-        const pName = profKey === 'akshay' ? "Akshay" : "Roommates";
-        const w = logItem.weight || 'N/A';
-        const hWalk = logItem.habits.walk ? 'Yes' : 'No';
-        const hEx = logItem.habits.exercise ? 'Yes' : 'No';
-        const hSug = logItem.habits.sugarCut ? 'Yes' : 'No';
+    Object.keys(userProfile.logs).sort().forEach(dateKey => {
+      const logItem = userProfile.logs[dateKey];
+      const mon = getWeekMonday(dateKey);
+      const w = logItem.weight || 'N/A';
+      const hWalk = logItem.habits.walk ? 'Yes' : 'No';
+      const hEx = logItem.habits.exercise ? 'Yes' : 'No';
+      const hSug = logItem.habits.sugarCut ? 'Yes' : 'No';
 
-        if (logItem.meals.length === 0) {
-          csvContent += `${date},${pName},${w},None,No Meals Logged,0,0,0,0,0,0,${hWalk},${hEx},${hSug}\n`;
-        } else {
-          logItem.meals.forEach(m => {
-            csvContent += `${date},${pName},${w},${m.mealTime},"${m.name}",${m.servings},${m.calories * m.servings},${m.protein * m.servings},${m.carbs * m.servings},${m.fat * m.servings},${m.fiber * m.servings},${hWalk},${hEx},${hSug}\n`;
-          });
-        }
-      });
+      if (logItem.meals.length === 0) {
+        csvContent += `${dateKey},${mon},${w},None,No Logged Intake,0,0,0,0,0,0,${hWalk},${hEx},${hSug}\n`;
+      } else {
+        logItem.meals.forEach(m => {
+          csvContent += `${dateKey},${mon},${w},${m.mealTime},"${m.name}",${m.servings},${m.calories * m.servings},${m.protein * m.servings},${m.carbs * m.servings},${m.fat * m.servings},${m.fiber * m.servings},${hWalk},${hEx},${hSug}\n`;
+        });
+      }
     });
 
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `Diet_Logs_Export_${selectedDate}.csv`);
+    link.setAttribute("download", `${userProfile.username}_diet_logs_${selectedDate}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -171,136 +337,134 @@ export default function DietTracker() {
 
   const mealTimes: MealTime[] = ['Breakfast', 'Lunch', 'Evening Snack', 'Dinner'];
 
-  // Theme-driven clean style constants to prevent code complexity
-  const themeBg = isDarkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900';
-  const themeCard = isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-slate-200 text-slate-900';
-  const themeInput = isDarkMode ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-slate-50 border-slate-200 text-slate-900';
-  const themeSubBg = isDarkMode ? 'bg-slate-800/50 border-slate-800' : 'bg-slate-50 border-slate-100';
-  const themeTextMuted = isDarkMode ? 'text-slate-400' : 'text-slate-500';
+  const clsBg = isDarkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900';
+  const clsCard = isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-slate-200 text-slate-900';
+  const clsInput = isDarkMode ? 'bg-slate-800 border-slate-700 text-white placeholder-slate-500' : 'bg-slate-50 border-slate-200 text-black placeholder-slate-400';
+  const clsSubBg = isDarkMode ? 'bg-slate-800/40 border-slate-800' : 'bg-slate-50 border-slate-100';
 
   return (
-    <div className={`min-h-screen ${themeBg} transition-colors duration-200 pb-12`}>
+    <div className={`min-h-screen ${clsBg} transition-colors duration-150 pb-12`}>
       <main className="max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
         
-        {/* Top Controller Bar */}
-        <header className={`${themeCard} p-4 rounded-xl shadow-sm border flex flex-col md:flex-row gap-4 justify-between items-center`}>
-          <h1 className="text-xl font-bold tracking-tight">MacroSync Engine</h1>
+        {/* Core Workspace Header Context */}
+        <header className={`${clsCard} p-4 rounded-xl shadow-sm border flex flex-col md:flex-row gap-4 justify-between items-center`}>
+          <div>
+            <h1 className="text-xl font-black tracking-tight bg-gradient-to-r from-blue-500 to-emerald-500 bg-clip-text text-transparent">Macros daily</h1>
+            <p className="text-xs text-blue-500 font-medium">Domain Space Account: <span className="uppercase font-bold">{userProfile.username}</span></p>
+          </div>
           
           <div className="flex flex-wrap gap-3 items-center">
-            {/* Dark Mode Switcher Button */}
-            <button
-              onClick={toggleTheme}
-              className={`px-3 py-2 rounded-lg text-xs font-bold border transition-colors ${
-                isDarkMode 
-                  ? 'bg-slate-800 border-slate-700 text-amber-400 hover:bg-slate-700' 
-                  : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'
-              }`}
-            >
-              {isDarkMode ? '☀️ Light Mode' : '🌙 Dark Mode'}
+            <button onClick={toggleTheme} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${isDarkMode ? 'bg-slate-800 border-slate-700 text-amber-400' : 'bg-white border-slate-200 text-slate-700'}`}>
+              {isDarkMode ? '☀️ Light' : '🌙 Dark'}
             </button>
 
             <input 
               type="date" 
               value={selectedDate} 
               onChange={(e) => setSelectedDate(e.target.value)} 
-              className={`${themeInput} border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500`}
+              className={`${clsInput} border rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500`}
             />
-            
-            <div className={`inline-flex ${isDarkMode ? 'bg-slate-800' : 'bg-slate-100'} p-1 rounded-lg border ${isDarkMode ? 'border-slate-700' : 'border-slate-200'}`}>
-              {profiles.map(p => (
-                <button
-                  key={p.id}
-                  onClick={() => setActiveProfile(p.id)}
-                  className={`px-3 py-1.5 rounded-md text-xs font-semibold tracking-wide transition-all ${
-                    activeProfile === p.id 
-                      ? (isDarkMode ? 'bg-slate-700 text-white shadow-sm' : 'bg-white text-blue-600 shadow-sm') 
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  {p.name}
-                </button>
-              ))}
-            </div>
 
-            <button 
-              onClick={handleExportCSV} 
-              className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-4 py-2 rounded-lg shadow-sm transition-colors"
-            >
-              Export Master Log (.CSV)
+            <button onClick={handleExportCSV} className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-4 py-2 rounded-lg transition-colors shadow-sm">
+              Export Individual Log (.CSV)
+            </button>
+
+            <button onClick={handleLogout} className="bg-slate-500 hover:bg-slate-600 text-white text-xs font-semibold px-3 py-2 rounded-lg transition-colors">
+              Exit Profile
             </button>
           </div>
         </header>
 
-        {/* Analytics Rows */}
+        {/* Dynamic Targets Setup Section */}
+        <section className={`${clsCard} border p-4 rounded-xl shadow-sm flex flex-col sm:flex-row justify-between items-center gap-4`}>
+          <div className="text-sm">
+            <span className="font-bold text-slate-400 block text-xs uppercase tracking-wider">Target Management</span>
+            Active Calorie configuration for week of <strong className="text-blue-500">{currentWeekMonday}</strong>: <strong className="text-base">{activeWeeklyTarget} kcal / day</strong>
+          </div>
+          <form onSubmit={handleSetWeeklyTarget} className="flex gap-2 w-full sm:w-auto">
+            <input 
+              type="number" 
+              required
+              min="0"
+              placeholder="Set specific target for this week"
+              value={weeklyTargetInput}
+              onChange={(e) => setWeeklyTargetInput(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))}
+              className={`${clsInput} border text-xs rounded-lg px-3 py-2 focus:outline-none w-full sm:w-56`}
+            />
+            <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-4 py-2 rounded-lg shrink-0 whitespace-nowrap">
+              Lock Weekly Target
+            </button>
+          </form>
+        </section>
+
+        {/* Display Panel Layout rows */}
         <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
           
-          {/* Calorie Goal Gauge */}
-          <div className={`${themeCard} border p-5 rounded-xl shadow-sm flex flex-col justify-between`}>
+          <div className={`${clsCard} border p-5 rounded-xl shadow-sm flex flex-col justify-between`}>
             <div>
-              <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400">Calorie Runway</h2>
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400">Calorie Runway Balance</h2>
               <div className="mt-2 flex items-baseline gap-2">
                 <span className="text-3xl font-extrabold">{Math.round(totals.calories)}</span>
-                <span className="text-sm font-medium text-slate-400">/ {currentTarget} kcal</span>
+                <span className="text-sm font-medium text-slate-400">/ {activeWeeklyTarget} kcal</span>
               </div>
             </div>
             
-            <div className="mt-4 pt-4 border-t border-slate-700/30">
+            <div className="mt-4 pt-4 border-t border-slate-700/20">
               {calorieDiff === 0 ? (
-                <span className="text-sm font-medium text-slate-400">Goal exact match reached.</span>
+                <span className="text-sm font-medium text-slate-400">Goal matched exactly.</span>
               ) : !isOvershot ? (
                 <div className="text-sm font-medium text-amber-500">
-                  Remaining: <strong className="font-bold">{Math.abs(Math.round(calorieDiff))} kcal</strong> to hit goal
+                  Deficit Remaining: <strong className="font-bold">{Math.abs(Math.round(calorieDiff))} kcal</strong> to match goal
                 </div>
               ) : (
                 <div className="text-sm font-medium text-rose-500">
-                  Overshot Target By: <strong className="font-bold">{Math.round(calorieDiff)} kcal</strong>
+                  Overshot Target Margin: <strong className="font-bold">{Math.round(calorieDiff)} kcal</strong>
                 </div>
               )}
             </div>
           </div>
 
-          {/* Macros Summary Panel */}
-          <div className={`${themeCard} border p-5 rounded-xl shadow-sm`}>
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-3">Macronutrients</h2>
+          <div className={`${clsCard} border p-5 rounded-xl shadow-sm`}>
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-3">Day Nutritional Breakdown</h2>
             <div className="grid grid-cols-2 gap-3 text-sm">
-              <div className={`${themeSubBg} border p-2.5 rounded-lg`}>
+              <div className={`${clsSubBg} border p-2.5 rounded-lg`}>
                 <span className="block text-xs text-slate-400 font-medium">Protein</span>
                 <strong className="text-base">{totals.protein.toFixed(1)}g</strong>
               </div>
-              <div className={`${themeSubBg} border p-2.5 rounded-lg`}>
+              <div className={`${clsSubBg} border p-2.5 rounded-lg`}>
                 <span className="block text-xs text-slate-400 font-medium">Carbohydrates</span>
                 <strong className="text-base">{totals.carbs.toFixed(1)}g</strong>
               </div>
-              <div className={`${themeSubBg} border p-2.5 rounded-lg`}>
+              <div className={`${clsSubBg} border p-2.5 rounded-lg`}>
                 <span className="block text-xs text-slate-400 font-medium">Fats</span>
                 <strong className="text-base">{totals.fat.toFixed(1)}g</strong>
               </div>
-              <div className={`${themeSubBg} border p-2.5 rounded-lg`}>
-                <span className="block text-xs text-slate-400 font-medium">Dietary Fiber</span>
+              <div className={`${clsSubBg} border p-2.5 rounded-lg`}>
+                <span className="block text-xs text-slate-400 font-medium">Fiber</span>
                 <strong className="text-base">{totals.fiber.toFixed(1)}g</strong>
               </div>
             </div>
           </div>
 
-          {/* Daily Weight & Checklist Metrics */}
-          <div className={`${themeCard} border p-5 rounded-xl shadow-sm space-y-4`}>
+          <div className={`${clsCard} border p-5 rounded-xl shadow-sm space-y-4`}>
             <div>
-              <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400 mb-1">Weight Tracking</label>
+              <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400 mb-1">Weight Log Tracker</label>
               <div className="flex gap-2">
                 <input 
                   type="number" 
                   step="0.1"
+                  min="0"
                   placeholder="eg. 54.2"
                   value={currentDayData.weight}
-                  onChange={(e) => updateCurrentLog({ weight: e.target.value })}
-                  className={`${themeInput} border w-full text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500`}
+                  onChange={(e) => updateProfileData({ weight: e.target.value === '' ? '' : String(Math.max(0, Number(e.target.value))) })}
+                  className={`${clsInput} border w-full text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500`}
                 />
                 <span className="text-sm self-center font-bold text-slate-400">KG</span>
               </div>
             </div>
 
-            <div className="pt-2 border-t border-slate-700/30">
-              <span className="block text-sm font-semibold uppercase tracking-wider text-slate-400 mb-2">Habits Checkbox</span>
+            <div className="pt-2 border-t border-slate-700/20">
+              <span className="block text-sm font-semibold uppercase tracking-wider text-slate-400 mb-2">Metrics Habit Checklist</span>
               <div className="flex flex-col gap-2">
                 {Object.keys(currentDayData.habits).map((key) => {
                   const habitKey = key as keyof typeof currentDayData.habits;
@@ -310,7 +474,7 @@ export default function DietTracker() {
                       <input 
                         type="checkbox"
                         checked={currentDayData.habits[habitKey]}
-                        onChange={(e) => updateCurrentLog({
+                        onChange={(e) => updateProfileData({
                           habits: { ...currentDayData.habits, [habitKey]: e.target.checked }
                         })}
                         className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
@@ -325,22 +489,21 @@ export default function DietTracker() {
 
         </section>
 
-        {/* Core Intake Workstations */}
+        {/* Workstation Processing Layout Tables */}
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           
-          {/* Input Interface Columns */}
           <div className="lg:col-span-1 space-y-6">
             
-            {/* Form: Log Existing Food */}
-            <div className={`${themeCard} border p-5 rounded-xl shadow-sm`}>
-              <h3 className="text-base font-bold mb-4 border-b border-slate-700/30 pb-2">Log Meal Intake</h3>
+            {/* Log Food Window */}
+            <div className={`${clsCard} border p-5 rounded-xl shadow-sm`}>
+              <h3 className="text-base font-bold mb-4 border-b border-slate-700/20 pb-2">Log Meal Intake</h3>
               <form onSubmit={handleAddFood} className="space-y-4">
                 <div>
                   <label className="block text-xs font-bold uppercase text-slate-400 mb-1">Select Time Window</label>
                   <select 
                     value={selectedMealTime} 
                     onChange={(e) => setSelectedMealTime(e.target.value as MealTime)}
-                    className={`${themeInput} border w-full text-sm rounded-lg p-2 focus:ring-2 focus:ring-blue-500`}
+                    className={`${clsInput} border w-full text-sm rounded-lg p-2 focus:ring-2 focus:ring-blue-500`}
                   >
                     {mealTimes.map(t => <option key={t} value={t}>{t}</option>)}
                   </select>
@@ -351,7 +514,7 @@ export default function DietTracker() {
                   <select 
                     value={selectedFoodIndex} 
                     onChange={(e) => setSelectedFoodIndex(Number(e.target.value))}
-                    className={`${themeInput} border w-full text-sm rounded-lg p-2 focus:ring-2 focus:ring-blue-500`}
+                    className={`${clsInput} border w-full text-sm rounded-lg p-2 focus:ring-2 focus:ring-blue-500`}
                   >
                     {combinedFoodList.map((food, idx) => (
                       <option key={idx} value={idx}>
@@ -362,14 +525,14 @@ export default function DietTracker() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold uppercase text-slate-400 mb-1">Servings / Quantity Multiplier</label>
+                  <label className="block text-xs font-bold uppercase text-slate-400 mb-1">Servings / Multiplier</label>
                   <input 
                     type="number" 
                     step="0.1" 
-                    min="0.1"
+                    min="0"
                     value={servings} 
-                    onChange={(e) => setServings(Number(e.target.value))}
-                    className={`${themeInput} border w-full text-sm rounded-lg p-2 focus:ring-2 focus:ring-blue-500`}
+                    onChange={(e) => setServings(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))}
+                    className={`${clsInput} border w-full text-sm rounded-lg p-2 focus:ring-2 focus:ring-blue-500`}
                   />
                 </div>
 
@@ -379,79 +542,83 @@ export default function DietTracker() {
               </form>
             </div>
 
-            {/* Form: Define Custom Unique Food */}
-            <div className={`${themeCard} border p-5 rounded-xl shadow-sm`}>
-              <h3 className="text-base font-bold mb-4 border-b border-slate-700/30 pb-2">Create Custom Food Type</h3>
+            {/* Custom Asset Config Generator */}
+            <div className={`${clsCard} border p-5 rounded-xl shadow-sm`}>
+              <h3 className="text-base font-bold mb-4 border-b border-slate-700/20 pb-2">Create Custom Food Type</h3>
               <form onSubmit={handleCreateCustomFood} className="space-y-3">
                 <div>
-                  <label className={`block text-xs font-medium ${themeTextMuted}`}>Food Description Name</label>
+                  <label className="block text-xs font-medium text-slate-400">Food Description Name</label>
                   <input 
                     type="text" 
                     required
-                    placeholder="e.g., Homemade Protein Shake"
-                    value={newFood.name} 
-                    onChange={(e) => setNewFood({...newFood, name: e.target.value})}
-                    className={`${themeInput} border w-full text-sm rounded-lg p-1.5 mt-0.5 focus:ring-2 focus:ring-blue-500`}
+                    placeholder="e.g. Rice Cakes"
+                    value={newFoodName} 
+                    onChange={(e) => setNewFoodName(e.target.value)}
+                    className={`${clsInput} border w-full text-sm rounded-lg p-1.5 mt-0.5 focus:ring-2 focus:ring-blue-500`}
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className={`block text-xs font-medium ${themeTextMuted}`}>Calories (kcal)</label>
+                    <label className="block text-xs font-medium text-slate-400">Calories (kcal)</label>
                     <input 
                       type="number" 
-                      required 
                       min="0"
-                      value={newFood.calories || ''} 
-                      onChange={(e) => setNewFood({...newFood, calories: Number(e.target.value)})}
-                      className={`${themeInput} border w-full text-sm rounded-lg p-1.5 mt-0.5`}
+                      value={newFoodCal} 
+                      placeholder="0"
+                      onChange={(e) => setNewFoodCal(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))}
+                      className={`${clsInput} border w-full text-sm rounded-lg p-1.5 mt-0.5`}
                     />
                   </div>
                   <div>
-                    <label className={`block text-xs font-medium ${themeTextMuted}`}>Protein (g)</label>
+                    <label className="block text-xs font-medium text-slate-400">Protein (g)</label>
                     <input 
                       type="number" 
                       step="0.1" 
                       min="0"
-                      value={newFood.protein || ''} 
-                      onChange={(e) => setNewFood({...newFood, protein: Number(e.target.value)})}
-                      className={`${themeInput} border w-full text-sm rounded-lg p-1.5 mt-0.5`}
+                      value={newFoodProt} 
+                      placeholder="0"
+                      onChange={(e) => setNewFoodProt(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))}
+                      className={`${clsInput} border w-full text-sm rounded-lg p-1.5 mt-0.5`}
                     />
                   </div>
                   <div>
-                    <label className={`block text-xs font-medium ${themeTextMuted}`}>Carbs (g)</label>
+                    <label className="block text-xs font-medium text-slate-400">Carbs (g)</label>
                     <input 
                       type="number" 
                       step="0.1" 
                       min="0"
-                      value={newFood.carbs || ''} 
-                      onChange={(e) => setNewFood({...newFood, carbs: Number(e.target.value)})}
-                      className={`${themeInput} border w-full text-sm rounded-lg p-1.5 mt-0.5`}
+                      value={newFoodCarb} 
+                      placeholder="0"
+                      onChange={(e) => setNewFoodCarb(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))}
+                      className={`${clsInput} border w-full text-sm rounded-lg p-1.5 mt-0.5`}
                     />
                   </div>
                   <div>
-                    <label className={`block text-xs font-medium ${themeTextMuted}`}>Fat (g)</label>
+                    <label className="block text-xs font-medium text-slate-400">Fat (g)</label>
                     <input 
                       type="number" 
                       step="0.1" 
                       min="0"
-                      value={newFood.fat || ''} 
-                      onChange={(e) => setNewFood({...newFood, fat: Number(e.target.value)})}
-                      className={`${themeInput} border w-full text-sm rounded-lg p-1.5 mt-0.5`}
+                      value={newFoodFat} 
+                      placeholder="0"
+                      onChange={(e) => setNewFoodFat(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))}
+                      className={`${clsInput} border w-full text-sm rounded-lg p-1.5 mt-0.5`}
                     />
                   </div>
                 </div>
                 <div>
-                  <label className={`block text-xs font-medium ${themeTextMuted}`}>Fiber (g)</label>
+                  <label className="block text-xs font-medium text-slate-400">Fiber (g)</label>
                   <input 
                     type="number" 
                     step="0.1" 
                     min="0"
-                    value={newFood.fiber || ''} 
-                    onChange={(e) => setNewFood({...newFood, fiber: Number(e.target.value)})}
-                    className={`${themeInput} border w-full text-sm rounded-lg p-1.5 mt-0.5`}
+                    value={newFoodFib} 
+                    placeholder="0"
+                    onChange={(e) => setNewFoodFib(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))}
+                    className={`${clsInput} border w-full text-sm rounded-lg p-1.5 mt-0.5`}
                   />
                 </div>
-                <button type="submit" className="w-full bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold py-2 rounded-lg transition-colors border border-slate-700 mt-2">
+                <button type="submit" className="w-full bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold py-2 rounded-lg border border-slate-700 mt-2 transition-colors">
                   Save Global Custom Food
                 </button>
               </form>
@@ -459,9 +626,9 @@ export default function DietTracker() {
 
           </div>
 
-          {/* Breakdown Output Lists (4 Meals Layout) */}
+          {/* Active Intake Timeline Tracking Matrix */}
           <div className="lg:col-span-2 space-y-4">
-            <div className={`${themeCard} border p-5 rounded-xl shadow-sm`}>
+            <div className={`${clsCard} border p-5 rounded-xl shadow-sm`}>
               <h3 className="text-base font-bold mb-4">Daily Meal Records Timeline</h3>
               
               {mealTimes.map(timeWindow => {
@@ -473,7 +640,7 @@ export default function DietTracker() {
                     </h4>
                     
                     {mealsInWindow.length === 0 ? (
-                      <p className="text-xs text-slate-400 italic pl-1">No intake data recorded for this meal track.</p>
+                      <p className="text-xs text-slate-400 italic pl-1">No data logged for this meal track window.</p>
                     ) : (
                       <div className="overflow-x-auto">
                         <table className="w-full text-left text-xs">
