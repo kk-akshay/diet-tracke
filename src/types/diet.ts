@@ -18,9 +18,7 @@ export interface LoggedFood extends FoodItem {
 }
 
 export interface HabitTracker {
-  walk: boolean;
-  exercise: boolean;
-  sugarCut: boolean;
+  [habitName: string]: boolean;
 }
 
 export interface DayLog {
@@ -29,11 +27,11 @@ export interface DayLog {
   habits: HabitTracker;
 }
 
-// Data isolation structure per individual account
 export interface UserProfileData {
   username: string;
   defaultTarget: number;
-  weeklyTargets: { [mondayDateStr: string]: number }; // Dynamic targets per week block
+  weeklyTargets: { [mondayDateStr: string]: number };
+  habitsList: string[];
   logs: { [dateStr: string]: DayLog };
 }
 
