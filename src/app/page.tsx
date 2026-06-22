@@ -6,17 +6,20 @@ import { FIXED_FOODS } from '../data/fixedFoods';
 import { supabase } from '../utils/supabase';
 import { FoodItem, MealTime, LoggedFood, DayLog, UserProfileData, MultiUserStorage } from '../types/diet';
 
+// Immutable static configuration assets defined outside the main component context loop
+const MEAL_TIMES: MealTime[] = ['Breakfast', 'Lunch', 'Evening Snack', 'Dinner'];
+
+const DEFAULT_HABITS = [
+  '🏃‍♂️ 10k Steps Walk',
+  '💪 Workout Session',
+  '🚫 No Added Sugar'
+];
+
 const INITIAL_DAY_LOG = (): DayLog => ({
-  weight: '',
+  weight: '65.0', 
   meals: [],
   habits: {}
 });
-
-const DEFAULT_HABITS = [
-  '跑 10k Steps Walk',
-  '💪 Routine Exercise Workout',
-  '🚫 Strict Zero Sugar Cut'
-];
 
 function getWeekMonday(dateStr: string): string {
   if (!dateStr) return '';
@@ -28,14 +31,17 @@ function getWeekMonday(dateStr: string): string {
 }
 
 export default function MultiUserDietTracker() {
-  // Global Engine States
+  // ==========================================
+  // 1. COMPONENT REACT STATES (Initialized First)
+  // ==========================================
   const [db, setDb] = useState<MultiUserStorage>({});
   const [currentUser, setCurrentUser] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string>('');
   const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
   const [mounted, setMounted] = useState(false);
+  const [showSettings, setShowSettings] = useState<boolean>(false);
+  const [showMenu, setShowMenu] = useState<boolean>(false);
 
-  // Modern Auth Gateway States
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPasscode, setLoginPasscode] = useState('');
@@ -43,61 +49,29 @@ export default function MultiUserDietTracker() {
   const [regPasscode, setRegPasscode] = useState('');
   const [regDefaultTarget, setRegDefaultTarget] = useState<number | ''>(2500);
 
-  // Dashboard Operations States
   const [customFoods, setCustomFoods] = useState<FoodItem[]>([]);
   const [selectedMealTime, setSelectedMealTime] = useState<MealTime>('Breakfast');
   const [selectedFoodIndex, setSelectedFoodIndex] = useState<number>(0);
+  
+  // Clean baseline application standard defaults
   const [servings, setServings] = useState<number | ''>(1);
-  const [weeklyTargetInput, setWeeklyTargetInput] = useState<number | ''>('');
+  const [weeklyTargetInput, setWeeklyTargetInput] = useState<number | ''>(3000);
 
-  // Custom Habits Manager State
   const [newHabitName, setNewHabitName] = useState('');
-
-  // Custom Ingredient Creator States
   const [newFoodName, setNewFoodName] = useState('');
-  const [newFoodCal, setNewFoodCal] = useState<number | ''>('');
-  const [newFoodProt, setNewFoodProt] = useState<number | ''>('');
-  const [newFoodCarb, setNewFoodCarb] = useState<number | ''>('');
-  const [newFoodFat, setNewFoodFat] = useState<number | ''>('');
-  const [newFoodFib, setNewFoodFib] = useState<number | ''>('');
+  const [newFoodCal, setNewFoodCal] = useState<number | ''>(0);
+  const [newFoodProt, setNewFoodProt] = useState<number | ''>(0);
+  const [newFoodCarb, setNewFoodCarb] = useState<number | ''>(0);
+  const [newFoodFat, setNewFoodFat] = useState<number | ''>(0);
+  const [newFoodFib, setNewFoodFib] = useState<number | ''>(0);
 
-  // Trigger State for high-fidelity interactive animations
-  const [quantumTriggerHabit, setQuantumTriggerHabit] = useState<string | null>(null);
+  const [lastCheckedHabit, setLastCheckedHabit] = useState<string | null>(null);
+  const [showConfettiEffect, setShowConfettiEffect] = useState<boolean>(false);
 
-  // Initialization & Cloud Data Sync Engine
-  useEffect(() => {
-    setSelectedDate(new Date().toISOString().split('T')[0]);
-    const savedCustom = localStorage.getItem('macrosync_custom_foods');
-    const savedTheme = localStorage.getItem('macrosync_theme');
-    const savedSession = localStorage.getItem('macrosync_active_session');
-
-    if (savedCustom) setCustomFoods(JSON.parse(savedCustom));
-    if (savedTheme) setIsDarkMode(savedTheme === 'dark');
-    
-    if (savedSession) {
-      setCurrentUser(savedSession);
-      fetchCloudProfile(savedSession);
-    }
-    setMounted(true);
-  }, []);
-
-  useEffect(() => {
-    if (mounted) localStorage.setItem('macrosync_custom_foods', JSON.stringify(customFoods));
-  }, [customFoods, mounted]);
-
-  useEffect(() => {
-    if (mounted && currentUser && db[currentUser]) {
-      const dispatchSync = async () => {
-        await supabase
-          .from('macros_daily_users')
-          .update({ profile_data: db[currentUser], updated_at: new Date() })
-          .eq('username', currentUser);
-      };
-      dispatchSync();
-    }
-  }, [db, currentUser, mounted]);
-
-  const fetchCloudProfile = async (username: string) => {
+  // ==========================================
+  // 2. CORE ACTION CONTROLLERS (Hoisted to Top)
+  // ==========================================
+  async function fetchCloudProfile(username: string) {
     const { data, error } = await supabase
       .from('macros_daily_users')
       .select('profile_data')
@@ -107,10 +81,23 @@ export default function MultiUserDietTracker() {
     if (data && !error) {
       setDb(prev => ({ ...prev, [username]: data.profile_data }));
     }
-  };
+  }
 
-  // User Space Configurations Handlers
-  const handleRegister = async (e: React.FormEvent) => {
+  function toggleTheme() {
+    const nextTheme = !isDarkMode;
+    setIsDarkMode(nextTheme);
+    localStorage.setItem('macrosync_theme', nextTheme ? 'dark' : 'light');
+  }
+
+  function updateProfileData(updatedLog: Partial<DayLog>) {
+    if (!currentUser || !db[currentUser]) return;
+    const currentProfile = db[currentUser];
+    const currentDayLog = currentProfile.logs[selectedDate] || INITIAL_DAY_LOG();
+    const freshLogs = { ...currentProfile.logs, [selectedDate]: { ...currentDayLog, ...updatedLog } };
+    setDb(prev => ({ ...prev, [currentUser]: { ...currentProfile, logs: freshLogs } }));
+  }
+
+  async function handleRegister(e: React.FormEvent) {
     e.preventDefault();
     const cleanName = regUsername.trim().toLowerCase();
     const cleanPass = regPasscode.trim();
@@ -135,11 +122,11 @@ export default function MultiUserDietTracker() {
       localStorage.setItem('macrosync_active_session', cleanName);
       setRegUsername(''); setRegPasscode(''); setRegDefaultTarget(2500);
     } else {
-      alert('Username already allocated or connection timeout.');
+      alert('This username is already taken.');
     }
-  };
+  }
 
-  const handleLogin = async (e: React.FormEvent) => {
+  async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
     const cleanName = loginUsername.trim().toLowerCase();
     const cleanPass = loginPasscode.trim();
@@ -158,169 +145,103 @@ export default function MultiUserDietTracker() {
         localStorage.setItem('macrosync_active_session', cleanName);
         setLoginUsername(''); setLoginPasscode('');
       } else {
-        alert('Invalid profile passcode PIN.');
+        alert('Incorrect security PIN.');
       }
     } else {
-      alert('Profile context workspace not found.');
+      alert('User profile not found.');
     }
-  };
-
-  const handleLogout = () => {
-    setCurrentUser(null);
-    localStorage.removeItem('macrosync_active_session');
-  };
-
-  const toggleTheme = () => {
-    const nextTheme = !isDarkMode;
-    setIsDarkMode(nextTheme);
-    localStorage.setItem('macrosync_theme', nextTheme ? 'dark' : 'light');
-  };
-
-  if (!mounted) return <div className="p-8 text-center text-slate-500">Accessing Cloud Workspace Matrix...</div>;
-
-  // Authorization Wall Entry
-  if (!currentUser || !db[currentUser]) {
-    return (
-      <div className={`min-h-screen flex items-center justify-center p-4 transition-colors duration-200 ${isDarkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900'}`}>
-        <div className={`w-full max-w-md p-5 sm:p-8 rounded-2xl border shadow-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
-          <div className="flex justify-between items-center mb-8">
-            <div>
-              <h1 className="text-2xl font-black tracking-tight bg-gradient-to-r from-blue-500 to-emerald-500 bg-clip-text text-transparent">Macros daily</h1>
-              <p className="text-xs text-slate-400 mt-0.5">Cloud Space Architecture</p>
-            </div>
-            <button onClick={toggleTheme} className={`text-xs px-3 py-1.5 rounded-lg border font-medium ${isDarkMode ? 'bg-slate-800 border-slate-700 text-amber-400' : 'bg-white border-slate-200 text-slate-600'}`}>
-              {isDarkMode ? '☀️ Light' : '🌙 Dark'}
-            </button>
-          </div>
-
-          <div className="grid grid-cols-2 p-1 mb-6 rounded-xl bg-slate-500/10 border border-slate-500/5">
-            <button type="button" onClick={() => setAuthMode('signin')} className={`py-2 text-sm font-bold rounded-lg transition-all ${authMode === 'signin' ? (isDarkMode ? 'bg-slate-800 text-white shadow' : 'bg-white text-blue-600 shadow') : 'text-slate-400'}`}>Sign In</button>
-            <button type="button" onClick={() => setAuthMode('signup')} className={`py-2 text-sm font-bold rounded-lg transition-all ${authMode === 'signup' ? (isDarkMode ? 'bg-slate-800 text-white shadow' : 'bg-white text-emerald-600 shadow') : 'text-slate-400'}`}>Sign Up</button>
-          </div>
-
-          {authMode === 'signin' ? (
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">User Signature ID</label>
-                <input type="text" required placeholder="e.g. akshay" value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)} className={`w-full text-sm rounded-lg p-2.5 border focus:ring-2 focus:ring-blue-500 focus:outline-none ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-200 text-black'}`}/>
-              </div>
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">Security PIN</label>
-                <input type="password" required placeholder="🔒 4-digit PIN" value={loginPasscode} onChange={(e) => setLoginPasscode(e.target.value)} className={`w-full text-sm rounded-lg p-2.5 border focus:ring-2 focus:ring-blue-500 focus:outline-none ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-200 text-black'}`}/>
-              </div>
-              <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm py-3 rounded-lg transition-colors">Connect Workspace →</button>
-            </form>
-          ) : (
-            <form onSubmit={handleRegister} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">Unique Username</label>
-                <input type="text" required placeholder="e.g. roommate1" value={regUsername} onChange={(e) => setRegUsername(e.target.value)} className={`w-full text-sm rounded-lg p-2.5 border focus:ring-2 focus:ring-emerald-500 focus:outline-none ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-200 text-black'}`}/>
-              </div>
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">Create Security PIN</label>
-                <input type="password" required placeholder="Choose a 4-digit PIN" value={regPasscode} onChange={(e) => setRegPasscode(e.target.value)} className={`w-full text-sm rounded-lg p-2.5 border focus:ring-2 focus:ring-emerald-500 focus:outline-none ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-200 text-black'}`}/>
-              </div>
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">Daily Calories Target</label>
-                <input type="number" required min="0" placeholder="e.g. 2800" value={regDefaultTarget} onChange={(e) => setRegDefaultTarget(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))} className={`w-full text-sm rounded-lg p-2.5 border focus:ring-2 focus:ring-emerald-500 focus:outline-none ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-200 text-black'}`}/>
-              </div>
-              <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm py-3 rounded-lg transition-colors">Provision Cloud Workspace ✓</button>
-            </form>
-          )}
-        </div>
-      </div>
-    );
   }
 
-  // Active Context Calculations
-  const userProfile: UserProfileData = db[currentUser];
-  const currentWeekMonday = getWeekMonday(selectedDate);
-  const activeWeeklyTarget = userProfile.weeklyTargets[currentWeekMonday] || userProfile.defaultTarget;
-  const currentDayData: DayLog = userProfile.logs[selectedDate] || INITIAL_DAY_LOG();
-  const combinedFoodList = [...FIXED_FOODS, ...customFoods];
-  
-  const activeHabitsList = userProfile.habitsList || [...DEFAULT_HABITS];
-  const dayHabitsState = currentDayData.habits || {};
+  function handleLogout() {
+    setCurrentUser(null);
+    setShowSettings(false);
+    setShowMenu(false);
+    localStorage.removeItem('macrosync_active_session');
+  }
 
-  const updateProfileData = (updatedLog: Partial<DayLog>) => {
-    const freshLogs = { ...userProfile.logs, [selectedDate]: { ...currentDayData, ...updatedLog } };
-    setDb(prev => ({ ...prev, [currentUser]: { ...userProfile, logs: freshLogs } }));
-  };
-
-  // Add Dynamic Custom Habit Option Action
-  const handleCreateCustomHabit = (e: React.FormEvent) => {
+  function handleCreateCustomHabit(e: React.FormEvent) {
     e.preventDefault();
     const cleanHabit = newHabitName.trim();
-    if (!cleanHabit) return;
-    if (activeHabitsList.includes(cleanHabit)) {
-      alert('Habit entry matching this description already tracked.');
+    if (!cleanHabit || !currentUser || !db[currentUser]) return;
+    const currentProfile = db[currentUser];
+    const currentHabits = currentProfile.habitsList || [...DEFAULT_HABITS];
+    
+    if (currentHabits.includes(cleanHabit)) {
+      alert('This habit is already in your list.');
       return;
     }
 
     setDb(prev => ({
       ...prev,
-      [currentUser]: { ...userProfile, habitsList: [...activeHabitsList, cleanHabit] }
+      [currentUser]: { ...currentProfile, habitsList: [...currentHabits, cleanHabit] }
     }));
     setNewHabitName('');
-  };
+  }
 
-  // Delete Custom Habit Action
-  const handleDeleteCustomHabit = (habitName: string) => {
-    const updatedHabitList = activeHabitsList.filter(h => h !== habitName);
+  function handleDeleteCustomHabit(habitName: string) {
+    if (!currentUser || !db[currentUser]) return;
+    const currentProfile = db[currentUser];
+    const currentHabits = currentProfile.habitsList || [...DEFAULT_HABITS];
+    const currentDayLog = currentProfile.logs[selectedDate] || INITIAL_DAY_LOG();
     
-    // Clean data mutations from current logging registry safely
-    const freshDayHabits = { ...dayHabitsState };
+    const updatedHabitList = currentHabits.filter(h => h !== habitName);
+    const freshDayHabits = { ...currentDayLog.habits };
     delete freshDayHabits[habitName];
 
-    const freshLogs = { ...userProfile.logs, [selectedDate]: { ...currentDayData, habits: freshDayHabits } };
+    const freshLogs = { ...currentProfile.logs, [selectedDate]: { ...currentDayLog, habits: freshDayHabits } };
+    setDb(prev => ({ ...prev, [currentUser]: { ...currentProfile, habitsList: updatedHabitList, logs: freshLogs } }));
+  }
 
-    setDb(prev => ({
-      ...prev,
-      [currentUser]: {
-        ...userProfile,
-        habitsList: updatedHabitList,
-        logs: freshLogs
-      }
-    }));
-  };
-
-  // Toggle Habit Status with quantum engine animations triggers
-  const handleToggleHabit = (habitName: string) => {
-    const nextStatus = !dayHabitsState[habitName];
+  function handleToggleHabit(habitName: string) {
+    if (!currentUser || !db[currentUser]) return;
+    const currentProfile = db[currentUser];
+    const currentDayLog = currentProfile.logs[selectedDate] || INITIAL_DAY_LOG();
+    const currentHabitsState = currentDayLog.habits || {};
     
-    if (nextStatus) {
-      setQuantumTriggerHabit(habitName);
-      setTimeout(() => setQuantumTriggerHabit(null), 800);
+    const nextStatus = !currentHabitsState[habitName];
+    setLastCheckedHabit(habitName);
+    
+    // Trigger localized dynamic state check logic
+    const activeHabits = currentProfile.habitsList || [...DEFAULT_HABITS];
+    const checkedCountAfterToggle = activeHabits.filter(h => h === habitName ? nextStatus : currentHabitsState[h]).length;
+    
+    if (nextStatus && checkedCountAfterToggle === activeHabits.length) {
+      setShowConfettiEffect(true);
+      setTimeout(() => setShowConfettiEffect(false), 2500);
     }
 
-    const freshHabits = { ...dayHabitsState, [habitName]: nextStatus };
+    setTimeout(() => setLastCheckedHabit(null), 400);
+    const freshHabits = { ...currentHabitsState, [habitName]: nextStatus };
     updateProfileData({ habits: freshHabits });
-  };
+  }
 
-  const handleSetWeeklyTarget = (e: React.FormEvent) => {
+  function handleSetWeeklyTarget(e: React.FormEvent) {
     e.preventDefault();
+    if (!currentUser || !db[currentUser]) return;
+    const currentProfile = db[currentUser];
     const targetFloor = weeklyTargetInput === '' ? 0 : Math.max(0, weeklyTargetInput);
     if (targetFloor <= 0) return;
     setDb(prev => ({
       ...prev,
-      [currentUser]: { ...userProfile, weeklyTargets: { ...userProfile.weeklyTargets, [currentWeekMonday]: targetFloor } }
+      [currentUser]: { ...currentProfile, weeklyTargets: { ...currentProfile.weeklyTargets, [currentWeekMonday]: targetFloor } }
     }));
     setWeeklyTargetInput('');
-    alert(`Target for week of ${currentWeekMonday} synchronized to ${targetFloor} kcal.`);
-  };
+  }
 
-  const handleAddFood = (e: React.FormEvent) => {
+  function handleAddFood(e: React.FormEvent) {
     e.preventDefault();
     const sourceFood = combinedFoodList[selectedFoodIndex];
     const cleanServings = servings === '' ? 1 : Math.max(0, servings);
     if (!sourceFood || cleanServings <= 0) return;
 
     const loggedItem: LoggedFood = { ...sourceFood, id: crypto.randomUUID(), servings: cleanServings, mealTime: selectedMealTime };
-    updateProfileData({ meals: [...currentDayData.meals, loggedItem] });
+    const currentProfile = db[currentUser!];
+    const currentDayLog = currentProfile?.logs[selectedDate] || INITIAL_DAY_LOG();
+    updateProfileData({ meals: [...(currentDayLog.meals || []), loggedItem] });
     setServings(1);
-  };
+  }
 
-  const handleCreateCustomFood = (e: React.FormEvent) => {
+  function handleCreateCustomFood(e: React.FormEvent) {
     e.preventDefault();
     if (!newFoodName.trim()) return;
 
@@ -334,38 +255,23 @@ export default function MultiUserDietTracker() {
     };
 
     setCustomFoods(prev => [...prev, customFoodAsset]);
-    setNewFoodName(''); setNewFoodCal(''); setNewFoodProt(''); setNewFoodCarb(''); setNewFoodFat(''); setNewFoodFib('');
-    alert(`"${customFoodAsset.name}" appended dynamically to cloud choices.`);
-  };
+    setNewFoodName(''); setNewFoodCal(0); setNewFoodProt(0); setNewFoodCarb(0); setNewFoodFat(0); setNewFoodFib(0);
+    alert(`"${customFoodAsset.name}" has been added to your available foods.`);
+  }
 
-  const handleDeleteLoggedFood = (id: string) => {
-    updateProfileData({ meals: currentDayData.meals.filter(m => m.id !== id) });
-  };
+  function handleDeleteLoggedFood(id: string) {
+    if (!currentUser || !db[currentUser]) return;
+    const currentProfile = db[currentUser];
+    const currentDayLog = currentProfile.logs[selectedDate] || INITIAL_DAY_LOG();
+    updateProfileData({ meals: (currentDayLog.meals || []).filter(m => m.id !== id) });
+  }
 
-  const totals = currentDayData.meals.reduce((acc, item) => {
-    acc.calories += item.calories * item.servings;
-    acc.protein += item.protein * item.servings;
-    acc.carbs += item.carbs * item.servings;
-    acc.fat += item.fat * item.servings;
-    acc.fiber += item.fiber * item.servings;
-    return acc;
-  }, { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
-
-  const calorieDiff = totals.calories - activeWeeklyTarget;
-  const isOvershot = calorieDiff > 0;
-
-  // Gamified Core Calculations Matrix
-  const totalHabitsCount = activeHabitsList.length;
-  const completedHabitsCount = activeHabitsList.filter(h => dayHabitsState[h]).length;
-  const habitPercentage = totalHabitsCount > 0 ? Math.round((completedHabitsCount / totalHabitsCount) * 100) : 0;
-  const is100Percent = habitPercentage === 100;
-  
-  const strokeDashoffset = totalHabitsCount > 0 ? 113.09 - (113.09 * completedHabitsCount) / totalHabitsCount : 113.09;
-
-  const handleExportCSV = () => {
+  function handleExportCSV() {
+    if (!currentUser || !db[currentUser]) return;
+    const currentProfile = db[currentUser];
     let csvContent = "data:text/csv;charset=utf-8,Date,Week Block,Logged Weight,Meal Time,Food Name,Servings,Total Calories,Protein(g),Carbs(g),Fat(g),Fiber(g)\n";
-    Object.keys(userProfile.logs).sort().forEach(dateKey => {
-      const logItem = userProfile.logs[dateKey];
+    Object.keys(currentProfile.logs).sort().forEach(dateKey => {
+      const logItem = currentProfile.logs[dateKey];
       const mon = getWeekMonday(dateKey);
       const w = logItem.weight || 'N/A';
       if (logItem.meals.length === 0) {
@@ -379,299 +285,438 @@ export default function MultiUserDietTracker() {
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `${userProfile.username}_diet_logs_${selectedDate}.csv`);
+    link.setAttribute("download", `${currentProfile.username}_diet_logs_${selectedDate}.csv`);
     document.body.appendChild(link); link.click(); document.body.removeChild(link);
-  };
+  }
 
-  const mealTimes: MealTime[] = ['Breakfast', 'Lunch', 'Evening Snack', 'Dinner'];
-  const clsBg = isDarkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900';
-  const clsCard = isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-slate-200 text-slate-900';
-  const clsInput = isDarkMode ? 'bg-slate-800 border-slate-700 text-white placeholder-slate-500' : 'bg-slate-50 border-slate-200 text-black placeholder-slate-400';
-  const clsSubBg = isDarkMode ? 'bg-slate-800/40 border-slate-800' : 'bg-slate-50 border-slate-100';
+  // ==========================================
+  // 3. EXTRACTED DATA & MATHEMATICS (Safe Layer)
+  // ==========================================
+  const userProfile: UserProfileData | undefined = currentUser ? db[currentUser] : undefined;
+  const currentWeekMonday = getWeekMonday(selectedDate);
+  const activeWeeklyTarget = userProfile ? (userProfile.weeklyTargets[currentWeekMonday] || userProfile.defaultTarget) : 2500;
+  const currentDayData: DayLog = (userProfile && userProfile.logs[selectedDate]) ? userProfile.logs[selectedDate] : INITIAL_DAY_LOG();
+  const combinedFoodList = [...FIXED_FOODS, ...customFoods];
+  const activeHabitsList = userProfile?.habitsList || [...DEFAULT_HABITS];
+  const dayHabitsState = currentDayData.habits || {};
+
+  const totals = (currentDayData.meals || []).reduce((acc, item) => {
+    acc.calories += item.calories * item.servings;
+    acc.protein += item.protein * item.servings;
+    acc.carbs += item.carbs * item.servings;
+    acc.fat += item.fat * item.servings;
+    acc.fiber += item.fiber * item.servings;
+    return acc;
+  }, { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
+
+  const calorieDiff = totals.calories - activeWeeklyTarget;
+  const isOvershot = calorieDiff > 0;
+  const isGoalReached = Math.round(totals.calories) >= activeWeeklyTarget;
+
+  const totalHabitsCount = activeHabitsList.length;
+  const completedHabitsCount = activeHabitsList.filter(h => dayHabitsState[h]).length;
+  const habitPercentage = totalHabitsCount > 0 ? Math.round((completedHabitsCount / totalHabitsCount) * 100) : 0;
+  const is100Percent = habitPercentage === 100;
+  const strokeDashoffset = totalHabitsCount > 0 ? 113.09 - (113.09 * completedHabitsCount) / totalHabitsCount : 113.09;
+
+  // Knob/Thumb position angles on progress circle (Calculated for rotated coordinate framework space)
+  const angleRadians = (habitPercentage / 100) * 2 * Math.PI;
+  const targetIndicatorX = 20 + 18 * Math.cos(angleRadians);
+  const targetIndicatorY = 20 + 18 * Math.sin(angleRadians);
+
+  // Dynamic progress circle colors mapping precisely to the custom design asset requirements
+  const circleTrackColor = isDarkMode ? '#1e222b' : '#e2e8f0';
+  const circleProgressColor = is100Percent 
+    ? (isDarkMode ? '#a78bfa' : '#6366f1') 
+    : (isDarkMode ? '#b4b6f9' : '#818cf8');
+
+  // ==========================================
+  // 4. DATA SYNCHRONIZATION LIFECYCLES
+  // ==========================================
+  useEffect(() => {
+    setSelectedDate(new Date().toISOString().split('T')[0]);
+    const savedCustom = localStorage.getItem('macrosync_custom_foods');
+    const savedTheme = localStorage.getItem('macrosync_theme');
+    const savedSession = localStorage.getItem('macrosync_active_session');
+
+    if (savedCustom) setCustomFoods(JSON.parse(savedCustom));
+    if (savedTheme) setIsDarkMode(savedTheme === 'dark');
+    
+    if (savedSession) {
+      setCurrentUser(savedSession);
+      fetchCloudProfile(savedSession);
+    }
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (mounted) localStorage.setItem('macrosync_custom_foods', JSON.stringify(customFoods));
+  }, [customFoods, mounted]);
+
+  useEffect(() => {
+    if (mounted && currentUser && db[currentUser]) {
+      const syncToCloud = async () => {
+        await supabase
+          .from('macros_daily_users')
+          .update({ profile_data: db[currentUser], updated_at: new Date() })
+          .eq('username', currentUser);
+      };
+      syncToCloud();
+    }
+  }, [db, currentUser, mounted]);
+
+  // ==========================================
+  // 5. SECURE RENDER WALL ENTRIES
+  // ==========================================
+  if (!mounted) return <div className="p-8 text-center text-slate-800 font-bold bg-slate-50 min-h-screen flex items-center justify-center">Loading your profile...</div>;
+
+  if (!currentUser || !userProfile) {
+    return (
+      <div className={`min-h-screen flex items-center justify-center p-4 transition-colors duration-200 ${isDarkMode ? 'bg-zinc-950 text-zinc-100' : 'bg-slate-50 text-slate-900'}`}>
+        <div className={`w-full max-w-md p-6 sm:p-8 rounded-2xl border shadow-md ${isDarkMode ? 'bg-zinc-900 border-zinc-800 shadow-black/40' : 'bg-white border-slate-200 shadow-slate-200/50'}`}>
+          
+          <div className="flex justify-between items-center mb-6">
+            <div>
+              <h1 className={`text-xl font-bold tracking-tight ${isDarkMode ? 'text-zinc-50' : 'text-zinc-900'}`}>Macros daily</h1>
+              <p className={`text-xs ${isDarkMode ? 'text-zinc-400' : 'text-slate-700'} mt-0.5`}>Simple meal and habit tracker</p>
+            </div>
+            <button onClick={toggleTheme} className={`text-xs px-3 py-1.5 rounded-lg border font-semibold ${isDarkMode ? 'bg-zinc-800 border-zinc-700 text-zinc-300' : 'bg-slate-50 border-slate-300 text-slate-800'}`}>
+              {isDarkMode ? '☀️ Light' : '🌙 Dark'}
+            </button>
+          </div>
+
+          <div className={`grid grid-cols-2 p-1 mb-6 rounded-lg ${isDarkMode ? 'bg-zinc-800' : 'bg-slate-100'}`}>
+            <button type="button" onClick={() => setAuthMode('signin')} className={`py-1.5 text-xs font-bold rounded-md transition-all ${authMode === 'signin' ? (isDarkMode ? 'bg-zinc-700 text-white shadow-sm' : 'bg-white text-zinc-900 shadow-sm') : (isDarkMode ? 'text-zinc-400' : 'text-slate-700')}`}>Sign In</button>
+            <button type="button" onClick={() => setAuthMode('signup')} className={`py-1.5 text-xs font-bold rounded-md transition-all ${authMode === 'signup' ? (isDarkMode ? 'bg-zinc-700 text-white shadow-sm' : 'bg-white text-zinc-900 shadow-sm') : (isDarkMode ? 'text-zinc-400' : 'text-slate-700')}`}>Sign Up</button>
+          </div>
+
+          {authMode === 'signin' ? (
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div>
+                <label className={`block text-xs font-bold ${isDarkMode ? 'text-zinc-400' : 'text-slate-800'} mb-1`}>Username</label>
+                <input type="text" required placeholder="Your username" value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)} className={`w-full text-sm rounded-lg px-3 py-2 border focus:ring-1 focus:ring-zinc-500 focus:outline-none ${isDarkMode ? 'bg-zinc-800 border-zinc-700 text-white placeholder-zinc-500' : 'bg-white border-slate-300 text-black placeholder-slate-400'}`}/>
+              </div>
+              <div>
+                <label className={`block text-xs font-bold ${isDarkMode ? 'text-zinc-400' : 'text-slate-800'} mb-1`}>4-Digit PIN</label>
+                <input type="password" required maxLength={4} placeholder="PIN" value={loginPasscode} onChange={(e) => setLoginPasscode(e.target.value)} className={`w-full text-sm rounded-lg px-3 py-2 border focus:ring-1 focus:ring-zinc-500 focus:outline-none ${isDarkMode ? 'bg-zinc-800 border-zinc-700 text-white placeholder-zinc-500' : 'bg-white border-slate-300 text-black placeholder-slate-400'}`}/>
+              </div>
+              <button type="submit" className={`w-full ${isDarkMode ? 'bg-zinc-800 hover:bg-zinc-700' : 'bg-zinc-900 hover:bg-zinc-800'} text-white font-semibold text-sm py-2.5 rounded-lg transition-colors shadow-sm`}>Open My Dashboard</button>
+            </form>
+          ) : (
+            <form onSubmit={handleRegister} className="space-y-4">
+              <div>
+                <label className={`block text-xs font-bold ${isDarkMode ? 'text-zinc-400' : 'text-slate-800'} mb-1`}>Choose Username</label>
+                <input type="text" required placeholder="e.g. akshay" value={regUsername} onChange={(e) => setRegUsername(e.target.value)} className={`w-full text-sm rounded-lg px-3 py-2 border focus:ring-1 focus:ring-zinc-500 focus:outline-none ${isDarkMode ? 'bg-zinc-800 border-zinc-700 text-white placeholder-zinc-500' : 'bg-white border-slate-300 text-black placeholder-slate-400'}`}/>
+              </div>
+              <div>
+                <label className={`block text-xs font-bold ${isDarkMode ? 'text-zinc-400' : 'text-slate-800'} mb-1`}>Create 4-Digit Security PIN</label>
+                <input type="password" required maxLength={4} placeholder="e.g. 1234" value={regPasscode} onChange={(e) => setRegPasscode(e.target.value)} className={`w-full text-sm rounded-lg px-3 py-2 border focus:ring-1 focus:ring-zinc-500 focus:outline-none ${isDarkMode ? 'bg-zinc-800 border-zinc-700 text-white placeholder-zinc-500' : 'bg-white border-slate-300 text-black placeholder-slate-400'}`}/>
+              </div>
+              <div>
+                <label className={`block text-xs font-bold ${isDarkMode ? 'text-zinc-400' : 'text-slate-800'} mb-1`}>Daily Calorie Goal</label>
+                <input type="number" required min="0" placeholder="e.g. 2500" value={regDefaultTarget} onChange={(e) => setRegDefaultTarget(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))} className={`w-full text-sm rounded-lg px-3 py-2 border focus:ring-1 focus:ring-zinc-500 focus:outline-none ${isDarkMode ? 'bg-zinc-800 border-zinc-700 text-white placeholder-zinc-500' : 'bg-white border-slate-300 text-black placeholder-slate-400'}`}/>
+              </div>
+              <button type="submit" className={`w-full ${isDarkMode ? 'bg-zinc-800 hover:bg-zinc-700' : 'bg-zinc-900 hover:bg-zinc-800'} text-white font-semibold text-sm py-2.5 rounded-lg transition-colors shadow-sm`}>Create My Profile</button>
+            </form>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // State-driven explicit structural baseline colors layer configurations
+  const clsBg = isDarkMode ? 'bg-zinc-950 text-zinc-100' : 'bg-slate-50 text-slate-900';
+  const clsCard = isDarkMode ? 'bg-zinc-900 border-zinc-800 text-zinc-100 shadow-sm' : 'bg-white border-slate-200 text-slate-900 shadow-sm shadow-slate-100';
+  const clsInput = isDarkMode ? 'bg-zinc-800 border-zinc-700 text-white placeholder-zinc-500' : 'bg-white border-slate-300 text-slate-900 placeholder-slate-400';
+  const clsSubBg = isDarkMode ? 'bg-zinc-800/40 border-zinc-800' : 'bg-slate-100/60 border-slate-200/60';
+
+  // Explicit text color definitions resolving high contrast constraints cleanly in Light mode
+  const clsTextTitle = isDarkMode ? 'text-zinc-50' : 'text-zinc-900';
+  const clsTextBody = isDarkMode ? 'text-zinc-300' : 'text-slate-800';
+  const clsTextMuted = isDarkMode ? 'text-zinc-400' : 'text-slate-500';
+  const clsTextMutedStrong = isDarkMode ? 'text-zinc-400' : 'text-slate-700';
 
   return (
-    <div className={`min-h-screen ${clsBg} transition-colors duration-150 pb-12`}>
+    <div className={`min-h-screen ${clsBg} transition-colors duration-150 pb-12 font-sans overflow-x-hidden relative`}>
       
-      {/* Dynamic Futuristic Style Block Injector */}
-      <style dangerouslySetInnerHTML={{__html: `
-        @keyframes quantumShockwave {
-          0% { box-shadow: 0 0 0 0px rgba(16, 185, 129, 0.6), inset 0 0 0px rgba(16, 185, 129, 0); transform: scale(1); }
-          20% { box-shadow: 0 0 12px 4px rgba(16, 185, 129, 0.4), inset 0 0 8px rgba(16, 185, 129, 0.3); transform: scale(1.02); }
-          100% { box-shadow: 0 0 20px 8px rgba(16, 185, 129, 0), inset 0 0 12px rgba(16, 185, 129, 0); transform: scale(1); }
-        }
-        @keyframes cyberScanline {
-          0% { background-position: 0% 0%; border-color: rgba(16, 185, 129, 0.3); box-shadow: 0 0 15px rgba(16, 185, 129, 0.1); }
-          50% { border-color: rgba(6, 182, 212, 0.8); box-shadow: 0 0 30px rgba(6, 182, 212, 0.3), 0 0 0 2px rgba(6, 182, 212, 0.1); }
-          100% { background-position: 0% 100%; border-color: rgba(16, 185, 129, 0.3); box-shadow: 0 0 15px rgba(16, 185, 129, 0.1); }
-        }
-        .animate-quantum-hit { animation: quantumShockwave 0.5s cubic-bezier(0.25, 1, 0.5, 1) forwards; }
-        .animate-cyber-complete { animation: cyberScanline 3s infinite linear; background-image: linear-gradient(rgba(16, 185, 129, 0.02) 50%, rgba(6, 182, 212, 0.02) 50%); background-size: 100% 4px; }
-      `}} />
+      {/* High-Motivation Full-Screen Celebration Popup Overlay */}
+      {showConfettiEffect && (
+        <div className="fixed inset-0 pointer-events-none z-50 flex flex-col items-center justify-center bg-zinc-950/60 backdrop-blur-md transition-opacity duration-300">
+          {/* Animated Rising Fire and Spark Elements */}
+          <div className="absolute inset-0 flex items-center justify-center overflow-hidden">
+            <div className="absolute bottom-12 left-[15%] text-5xl opacity-80 animate-bounce" style={{ animationDuration: '1.2s' }}>🔥</div>
+            <div className="absolute bottom-24 left-[30%] text-4xl opacity-70 animate-bounce" style={{ animationDuration: '0.9s', animationDelay: '0.2s' }}>⚡</div>
+            <div className="absolute bottom-8 right-[25%] text-5xl opacity-80 animate-bounce" style={{ animationDuration: '1.4s', animationDelay: '0.1s' }}>🔥</div>
+            <div className="absolute bottom-20 right-[10%] text-4xl opacity-70 animate-bounce" style={{ animationDuration: '1.1s', animationDelay: '0.3s' }}>💪</div>
+            <div className="absolute top-1/4 left-[20%] text-3xl opacity-40 animate-ping" style={{ animationDuration: '1.8s' }}>✨</div>
+            <div className="absolute top-1/3 right-[15%] text-4xl opacity-40 animate-ping" style={{ animationDuration: '2.2s' }}>🎉</div>
+          </div>
+          
+          {/* Main Motivation Card */}
+          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 p-6 rounded-2xl shadow-2xl text-center max-w-sm mx-4 transform scale-100 transition-transform duration-300 flex flex-col items-center space-y-4 pointer-events-auto shadow-indigo-500/10">
+            <div className="w-16 h-16 bg-gradient-to-tr from-amber-500 via-orange-500 to-rose-500 rounded-full flex items-center justify-center text-3xl shadow-lg shadow-orange-500/20 animate-pulse">
+              🔥
+            </div>
+            <div className="space-y-1">
+              <h2 className="text-xl font-extrabold tracking-tight text-slate-900 dark:text-zinc-50">
+                100% Habits Complete!
+              </h2>
+              <p className="text-xs text-slate-600 dark:text-zinc-400 font-medium leading-relaxed">
+                You checked off every single habit setup for today. You are absolute fire! Keep up this incredible execution momentum.
+              </p>
+            </div>
+            <div className="text-[11px] font-extrabold px-3 py-1 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 rounded-full border border-indigo-100 dark:border-indigo-900/40 tracking-wide uppercase">
+              Perfect Day Locked In 🎯
+            </div>
+          </div>
+        </div>
+      )}
 
       <main className="max-w-6xl mx-auto p-3 sm:p-6 space-y-4 sm:space-y-6">
         
-        {/* Branding Header */}
-        <header className={`${clsCard} p-4 sm:p-5 rounded-xl shadow-sm border flex flex-col md:flex-row gap-4 justify-between items-start md:items-center`}>
-          <div className="w-full md:w-auto flex justify-between items-center">
+        {/* Dynamic Multi-Row Fluid Responsive Header Module */}
+        <header className={`${clsCard} p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4`}>
+          <div className="flex items-center justify-between w-full sm:w-auto">
             <div>
-              <h1 className="text-xl font-black tracking-tight bg-gradient-to-r from-blue-500 to-emerald-500 bg-clip-text text-transparent">Macros daily</h1>
-              <p className="text-xs text-blue-500 font-medium">Domain Account: <span className="uppercase font-bold">{userProfile.username}</span></p>
+              <h1 className={`text-xl font-bold tracking-tight ${clsTextTitle}`}>Macros daily</h1>
+              <p className={`text-[11px] ${clsTextMutedStrong} font-semibold mt-0.5`}>
+                Logged user: <span className={`capitalize ${clsTextTitle} font-bold`}>{userProfile.username}</span>
+              </p>
             </div>
-            <button onClick={toggleTheme} className={`md:hidden px-3 py-1.5 rounded-lg text-xs font-bold border ${isDarkMode ? 'bg-slate-800 border-slate-700 text-amber-400' : 'bg-white border-slate-200 text-slate-700'}`}>
-              {isDarkMode ? '☀️ Light' : '🌙 Dark'}
+            {/* Theme selector moved next to branding text strictly on mobile devices */}
+            <button 
+              type="button" 
+              onClick={toggleTheme} 
+              className={`sm:hidden w-8 h-8 flex items-center justify-center rounded-lg border text-xs font-bold ${isDarkMode ? 'bg-zinc-800 border-zinc-700 text-amber-400' : 'bg-slate-50 border-slate-300 text-slate-800'}`}
+            >
+              {isDarkMode ? '☀️' : '🌙'}
             </button>
           </div>
           
-          <div className="grid grid-cols-2 md:flex md:flex-row gap-2 w-full md:w-auto items-center">
-            <button onClick={toggleTheme} className={`hidden md:inline-block px-3 py-1.5 rounded-lg text-xs font-bold border shrink-0 ${isDarkMode ? 'bg-slate-800 border-slate-700 text-amber-400' : 'bg-white border-slate-200 text-slate-700'}`}>
-              {isDarkMode ? '☀️ Light' : '🌙 Dark'}
+          <div className={`flex items-center justify-between sm:justify-end gap-2 w-full sm:w-auto pt-2.5 sm:pt-0 border-t ${isDarkMode ? 'border-zinc-800' : 'border-slate-100'} sm:border-t-0`}>
+            <input 
+              type="date" 
+              value={selectedDate} 
+              onChange={(e) => setSelectedDate(e.target.value)} 
+              className={`${clsInput} border rounded-lg px-2.5 py-1.5 text-xs sm:text-sm focus:outline-none w-full sm:w-36`}
+            />
+
+            <button 
+              type="button" 
+              onClick={toggleTheme} 
+              className={`hidden sm:flex w-8 h-8 flex items-center justify-center rounded-lg border text-xs font-bold shrink-0 ${isDarkMode ? 'bg-zinc-800 border-zinc-700 text-amber-400' : 'bg-slate-50 border-slate-300 text-slate-700 hover:bg-slate-100'}`}
+            >
+              {isDarkMode ? '☀️' : '🌙'}
             </button>
-            <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} className={`${clsInput} border rounded-lg px-3 py-1.5 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 col-span-2 md:w-40 w-full`}/>
-            <button onClick={handleExportCSV} className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-3 py-2 rounded-lg shadow-sm w-full md:w-auto text-center whitespace-nowrap">Export (.CSV)</button>
-            <button onClick={handleLogout} className="bg-slate-500 hover:bg-slate-600 text-white text-xs font-semibold px-3 py-2 rounded-lg w-full md:w-auto text-center whitespace-nowrap">Exit Profile</button>
+
+            <div className="relative">
+              <button 
+                type="button" 
+                onClick={() => setShowMenu(!showMenu)} 
+                className={`w-8 h-8 flex items-center justify-center rounded-lg border text-sm font-bold transition-all ${isDarkMode ? 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700' : 'bg-slate-50 border-slate-300 text-slate-700 hover:bg-slate-100'}`}
+              >
+                ⋮
+              </button>
+              
+              {showMenu && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setShowMenu(false)} />
+                  <div className={`absolute right-0 mt-2 w-44 rounded-xl border p-1 shadow-lg z-20 origin-top-right transition-all ${isDarkMode ? 'bg-zinc-900 border-zinc-800 text-zinc-200' : 'bg-white border-slate-200 text-slate-900'}`}>
+                    <button type="button" onClick={() => { setShowSettings(true); setShowMenu(false); }} className={`w-full text-left text-xs font-bold px-3 py-2 rounded-lg ${isDarkMode ? 'hover:bg-zinc-800/60 text-zinc-200' : 'hover:bg-slate-50 text-slate-800'} flex items-center gap-2`}>⚙️ Settings</button>
+                    <button type="button" onClick={() => { handleExportCSV(); setShowMenu(false); }} className={`w-full text-left text-xs font-bold px-3 py-2 rounded-lg ${isDarkMode ? 'hover:bg-zinc-800/60 text-zinc-200' : 'hover:bg-slate-50 text-slate-800'} flex items-center gap-2`}>📥 Export Data</button>
+                    <div className={`border-t ${isDarkMode ? 'border-zinc-800' : 'border-slate-200'} my-1`} />
+                    <button type="button" onClick={handleLogout} className="w-full text-left text-xs font-bold px-3 py-2 rounded-lg text-rose-600 hover:bg-rose-50 flex items-center gap-2">🚪 Sign Out</button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </header>
 
-        {/* Dynamic Targets Setup Section */}
-        <section className={`${clsCard} border p-4 sm:p-5 rounded-xl shadow-sm flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4`}>
+        {/* Weekly Targets Section */}
+        <section className={`${clsCard} border p-4 sm:p-5 rounded-xl flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4`}>
           <div className="text-xs sm:text-sm w-full lg:w-auto">
-            <span className="font-bold text-slate-400 block text-xs uppercase tracking-wider mb-1.5">Target Management</span>
-            <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3 flex-wrap text-slate-600 dark:text-slate-300">
-              <div className="text-xs sm:text-sm">Week of: <strong className="text-blue-500 font-bold">{currentWeekMonday}</strong></div>
-              <div className="hidden sm:block text-slate-400/60 text-xs">|</div>
-              <div className="text-xs sm:text-sm">Active Goal: <strong className="text-sm sm:text-base font-black text-blue-500 whitespace-nowrap">{activeWeeklyTarget} kcal / day</strong></div>
+            <span className={`font-bold ${clsTextMuted} block text-xs uppercase tracking-wider mb-1`}>Weekly Setup</span>
+            <div className={`flex items-center gap-3 ${clsTextBody} font-medium`}>
+              <div>Week block: <span>{currentWeekMonday}</span></div>
+              <div className={isDarkMode ? 'text-zinc-700' : 'text-slate-300'}>|</div>
+              <div>Current Goal: <span className={`font-bold ${clsTextTitle}`}>{activeWeeklyTarget} kcal / day</span></div>
             </div>
           </div>
           <form onSubmit={handleSetWeeklyTarget} className="flex flex-col sm:flex-row gap-2 w-full lg:w-auto">
-            <input type="number" required min="0" placeholder="Set specific target for this week" value={weeklyTargetInput} onChange={(e) => setWeeklyTargetInput(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))} className={`${clsInput} border text-xs rounded-lg px-3 py-2.5 focus:outline-none w-full lg:w-56`}/>
-            <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-4 py-2.5 rounded-lg shrink-0 w-full sm:w-auto transition-colors">Lock Weekly Target</button>
+            <input type="number" required min="0" placeholder="Change goal for this week" value={weeklyTargetInput} onChange={(e) => setWeeklyTargetInput(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))} className={`${clsInput} border text-xs rounded-lg px-3 py-2.5 w-full lg:w-52 focus:ring-1 focus:ring-zinc-400 focus:outline-none`}/>
+            <button type="submit" className={`bg-zinc-900 hover:bg-zinc-800 ${isDarkMode ? 'dark:bg-zinc-800 dark:hover:bg-zinc-700' : ''} text-white font-semibold text-xs px-4 py-2.5 rounded-lg transition-all active:scale-95 shrink-0`}>Update Goal</button>
           </form>
         </section>
 
-        {/* Metrics Overview Layer Rows */}
+        {/* Analytics Display Matrix Panel */}
         <section className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
-          <div className={`${clsCard} border p-4 sm:p-5 rounded-xl shadow-sm flex flex-col justify-between min-h-[130px]`}>
+          <div className={`${clsCard} border p-4 sm:p-5 rounded-xl flex flex-col justify-between space-y-4 transition-all duration-500 ${isGoalReached ? 'ring-2 ring-indigo-500/20 scale-[1.01]' : ''}`}>
             <div>
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Calorie Runway Balance</h2>
-              <div className="mt-2 flex items-baseline gap-1.5">
-                <span className="text-3xl font-black tracking-tight">{Math.round(totals.calories)}</span>
-                <span className="text-xs font-semibold text-slate-400">/ {activeWeeklyTarget} kcal</span>
+              <h2 className={`text-xs font-bold uppercase tracking-wider ${clsTextMuted}`}>Calories Balance</h2>
+              <div className="mt-2 flex items-baseline gap-1">
+                <span className={`text-3xl font-bold tracking-tight ${clsTextTitle} transition-transform duration-300 inline-block ${isGoalReached ? 'scale-105 text-indigo-600 dark:text-indigo-400' : ''}`}>{Math.round(totals.calories)}</span>
+                <span className={`text-xs font-medium ${isDarkMode ? 'text-zinc-500' : 'text-slate-500'}`}>/ {activeWeeklyTarget} kcal</span>
               </div>
             </div>
             <div>
               {calorieDiff === 0 ? (
-                <div className="rounded-lg p-2.5 text-center text-xs font-bold bg-slate-500/10 text-slate-400">Target Exact Match</div>
+                <div className={`rounded-lg p-2 text-center text-xs font-medium animate-pulse ${isDarkMode ? 'bg-zinc-800 text-zinc-300' : 'bg-slate-100 text-slate-800'}`}>Goal matched exactly</div>
               ) : !isOvershot ? (
-                <div className="rounded-lg p-3 bg-amber-500/10 border border-amber-500/20 text-amber-500">
-                  <span className="block text-[10px] uppercase font-bold tracking-wider opacity-80">Deficit Remaining</span>
-                  <span className="text-sm font-extrabold tracking-tight">{Math.abs(Math.round(calorieDiff))} kcal</span>
+                <div className={`rounded-lg p-2.5 bg-amber-50 ${isDarkMode ? 'dark:bg-amber-950/10 dark:border-amber-900/20 dark:text-amber-400' : 'border-amber-200 text-amber-900'} border text-xs font-bold transition-all duration-300`}>
+                  Remaining: <span>{Math.abs(Math.round(calorieDiff))} kcal</span>
                 </div>
               ) : (
-                <div className="rounded-lg p-3 bg-rose-500/10 border border-rose-500/20 text-rose-500">
-                  <span className="block text-[10px] uppercase font-bold tracking-wider opacity-80">Target Overshot By</span>
-                  <span className="text-sm font-extrabold tracking-tight">{Math.round(calorieDiff)} kcal</span>
+                <div className={`rounded-lg p-2.5 bg-indigo-50 ${isDarkMode ? 'dark:bg-indigo-950/20 dark:border-indigo-900/40 dark:text-indigo-300' : 'border-indigo-200 text-indigo-900'} border text-xs font-bold animate-pulse`}>
+                  Goal Achieved! Over By: <span>{Math.round(calorieDiff)} kcal</span>
                 </div>
               )}
             </div>
           </div>
 
-          <div className={`${clsCard} border p-4 sm:p-5 rounded-xl shadow-sm`}>
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">Day Nutritional Breakdown</h2>
-            <div className="grid grid-cols-2 gap-2 sm:gap-3 text-xs">
-              <div className={`${clsSubBg} border p-2.5 rounded-lg`}><span className="block text-[10px] text-slate-400 font-medium">Protein</span><strong className="text-sm sm:text-base font-bold">{totals.protein.toFixed(1)}g</strong></div>
-              <div className={`${clsSubBg} border p-2.5 rounded-lg`}><span className="block text-[10px] text-slate-400 font-medium">Carbohydrates</span><strong className="text-sm sm:text-base font-bold">{totals.carbs.toFixed(1)}g</strong></div>
-              <div className={`${clsSubBg} border p-2.5 rounded-lg`}><span className="block text-[10px] text-slate-400 font-medium">Fats</span><strong className="text-sm sm:text-base font-bold">{totals.fat.toFixed(1)}g</strong></div>
-              <div className={`${clsSubBg} border p-2.5 rounded-lg`}><span className="block text-[10px] text-slate-400 font-medium">Fiber</span><strong className="text-sm sm:text-base font-bold">{totals.fiber.toFixed(1)}g</strong></div>
+          <div className={`${clsCard} border p-4 sm:p-5 rounded-xl`}>
+            <h2 className={`text-xs font-bold uppercase tracking-wider ${clsTextMuted} mb-3`}>Nutrition Logged</h2>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className={`${clsSubBg} border p-2 rounded-lg`}><span className={`block text-[10px] ${clsTextMutedStrong} font-bold`}>Protein</span><strong className={`text-sm font-semibold ${clsTextTitle}`}>{totals.protein.toFixed(1)}g</strong></div>
+              <div className={`${clsSubBg} border p-2 rounded-lg`}><span className={`block text-[10px] ${clsTextMutedStrong} font-bold`}>Carbs</span><strong className={`text-sm font-semibold ${clsTextTitle}`}>{totals.carbs.toFixed(1)}g</strong></div>
+              <div className={`${clsSubBg} border p-2 rounded-lg`}><span className={`block text-[10px] ${clsTextMutedStrong} font-bold`}>Fats</span><strong className={`text-sm font-semibold ${clsTextTitle}`}>{totals.fat.toFixed(1)}g</strong></div>
+              <div className={`${clsSubBg} border p-2 rounded-lg`}><span className={`block text-[10px] ${clsTextMutedStrong} font-bold`}>Fiber</span><strong className={`text-sm font-semibold ${clsTextTitle}`}>{totals.fiber.toFixed(1)}g</strong></div>
             </div>
           </div>
 
-          <div className={`${clsCard} border p-4 sm:p-5 rounded-xl shadow-sm flex flex-col justify-center`}>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Weight Log Tracker</label>
+          <div className={`${clsCard} border p-4 sm:p-5 rounded-xl flex flex-col justify-center`}>
+            <label className={`block text-xs font-bold uppercase tracking-wider ${clsTextMuted} mb-1.5`}>Weight Tracking</label>
             <div className="flex gap-2">
-              <input type="number" step="0.1" min="0" placeholder="eg. 54.2" value={currentDayData.weight} onChange={(e) => updateProfileData({ weight: e.target.value === '' ? '' : String(Math.max(0, Number(e.target.value))) })} className={`${clsInput} border w-full text-xs sm:text-sm rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500`}/>
-              <span className="text-xs self-center font-bold text-slate-400 shrink-0">KG</span>
+              <input type="number" step="0.1" min="0" placeholder="e.g. 65.0" value={currentDayData.weight} onChange={(e) => updateProfileData({ weight: e.target.value === '' ? '' : String(Math.max(0, Number(e.target.value))) })} className={`${clsInput} border w-full text-xs sm:text-sm rounded-lg p-2.5 focus:ring-1 focus:ring-zinc-400 focus:outline-none`}/>
+              <span className={`text-xs self-center font-bold ${clsTextMutedStrong} shrink-0`}>KG</span>
             </div>
           </div>
         </section>
 
-        {/* Input Processors Forms Area & Tightly Linked Progress Habit Track Workspace */}
+        {/* Dynamic Entry Stations Layout columns */}
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
-          
-          <div className="lg:col-span-1 space-y-4 sm:space-y-6">
-            <div className={`${clsCard} border p-4 sm:p-5 rounded-xl shadow-sm`}>
-              <h3 className="text-sm font-bold mb-3 border-b border-slate-700/20 pb-2 uppercase tracking-wider text-slate-400">Log Meal Intake</h3>
-              <form onSubmit={handleAddFood} className="space-y-3.5">
+          <div className="lg:col-span-1">
+            <div className={`${clsCard} border p-4 sm:p-5 rounded-xl h-full`}>
+              <h3 className={`text-xs font-bold uppercase tracking-wider ${clsTextMuted} mb-3 border-b ${isDarkMode ? 'border-zinc-800' : 'border-slate-200'} pb-2`}>Log a Meal</h3>
+              <form onSubmit={handleAddFood} className="space-y-3">
                 <div>
-                  <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">Select Time Window</label>
-                  <select value={selectedMealTime} onChange={(e) => setSelectedMealTime(e.target.value as MealTime)} className={`${clsInput} border w-full text-xs rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500`}>
-                    {mealTimes.map(t => <option key={t} value={t}>{t}</option>)}
+                  <label className={`block text-[10px] font-bold ${clsTextMutedStrong} uppercase`}>Meal Window</label>
+                  <select value={selectedMealTime} onChange={(e) => setSelectedMealTime(e.target.value as MealTime)} className={`${clsInput} border w-full text-xs rounded-lg p-2 focus:outline-none`}>
+                    {MEAL_TIMES.map(t => <option key={t} value={t}>{t}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">Select Food Source</label>
-                  <select value={selectedFoodIndex} onChange={(e) => setSelectedFoodIndex(Number(e.target.value))} className={`${clsInput} border w-full text-xs rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500`}>
+                  <label className={`block text-[10px] font-bold ${clsTextMutedStrong} uppercase`}>Food Item</label>
+                  <select value={selectedFoodIndex} onChange={(e) => setSelectedFoodIndex(Number(e.target.value))} className={`${clsInput} border w-full text-xs rounded-lg p-2 focus:outline-none`}>
                     {combinedFoodList.map((food, idx) => <option key={idx} value={idx}>{food.name} ({food.calories} kcal)</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">Servings / Multiplier</label>
-                  <input type="number" step="0.1" min="0" value={servings} onChange={(e) => setServings(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))} className={`${clsInput} border w-full text-xs rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500`}/>
+                  <label className={`block text-[10px] font-bold ${clsTextMutedStrong} uppercase`}>Quantity / Servings</label>
+                  <input type="number" step="0.1" min="0" value={servings} onChange={(e) => setServings(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))} className={`${clsInput} border w-full text-xs rounded-lg p-2 focus:outline-none`}/>
                 </div>
-                <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold py-2.5 rounded-lg transition-colors">Add To Log</button>
-              </form>
-            </div>
-
-            <div className={`${clsCard} border p-4 sm:p-5 rounded-xl shadow-sm`}>
-              <h3 className="text-sm font-bold mb-3 border-b border-slate-700/20 pb-2 uppercase tracking-wider text-slate-400">Create Custom Food</h3>
-              <form onSubmit={handleCreateCustomFood} className="space-y-3">
-                <div>
-                  <label className="block text-[10px] font-medium text-slate-400">Food Description Name</label>
-                  <input type="text" required placeholder="e.g. Rice Cakes" value={newFoodName} onChange={(e) => setNewFoodName(e.target.value)} className={`${clsInput} border w-full text-xs rounded-lg p-2 mt-0.5 focus:ring-2 focus:ring-blue-500`}/>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-[10px] font-medium text-slate-400">Calories (kcal)</label>
-                    <input type="number" min="0" value={newFoodCal} placeholder="0" onChange={(e) => setNewFoodCal(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))} className={`${clsInput} border w-full text-xs rounded-lg p-2 mt-0.5`}/>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-medium text-slate-400">Protein (g)</label>
-                    <input type="number" step="0.1" min="0" value={newFoodProt} placeholder="0" onChange={(e) => setNewFoodProt(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))} className={`${clsInput} border w-full text-xs rounded-lg p-2 mt-0.5`}/>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-medium text-slate-400">Carbs (g)</label>
-                    <input type="number" step="0.1" min="0" value={newFoodCarb} placeholder="0" onChange={(e) => setNewFoodCarb(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))} className={`${clsInput} border w-full text-xs rounded-lg p-2 mt-0.5`}/>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-medium text-slate-400">Fat (g)</label>
-                    <input type="number" step="0.1" min="0" value={newFoodFat} placeholder="0" onChange={(e) => setNewFoodFat(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))} className={`${clsInput} border w-full text-xs rounded-lg p-2 mt-0.5`}/>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-[10px] font-medium text-slate-400">Fiber (g)</label>
-                  <input type="number" step="0.1" min="0" value={newFoodFib} placeholder="0" onChange={(e) => setNewFoodFib(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))} className={`${clsInput} border w-full text-xs rounded-lg p-2 mt-0.5`}/>
-                </div>
-                <button type="submit" className="w-full bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold py-2.5 rounded-lg border border-slate-700 mt-1 transition-colors">Save Global Custom Food</button>
+                <button type="submit" className={`w-full bg-zinc-900 hover:bg-zinc-800 ${isDarkMode ? 'dark:bg-zinc-800 dark:hover:bg-zinc-700' : ''} text-white text-xs font-semibold py-2 rounded-lg transition-all active:scale-95 shadow-sm`}>Add to Logs</button>
               </form>
             </div>
           </div>
 
-          {/* Right Main Columns: Connected Gamified Habits Tracking Workspace */}
           <div className="lg:col-span-2 space-y-4 sm:space-y-6">
             
-            {/* Gamified Habit Workspace Module with Infinite Matrix Scanline Aura (100% complete) */}
-            <div className={`${clsCard} border p-4 sm:p-5 rounded-xl shadow-sm transition-all duration-300 ${is100Percent ? 'animate-cyber-complete border-cyan-500' : ''}`}>
-              <div className="flex items-center justify-between border-b border-slate-700/20 pb-3 mb-4">
+            {/* Refined Minimalist Habits Card Station Component */}
+            <div className={`${clsCard} border p-4 sm:p-5 rounded-xl transition-all duration-500 ${is100Percent ? 'ring-2 ring-emerald-500/20 shadow-lg' : ''}`}>
+              <div className={`flex items-center justify-between border-b ${isDarkMode ? 'border-zinc-800' : 'border-slate-200'} pb-3 mb-4`}>
                 <div>
-                  <h3 className="text-sm font-black uppercase tracking-wider text-slate-400">Daily Discipline Track</h3>
-                  <p className="text-[11px] font-bold mt-0.5 text-cyan-500 dark:text-cyan-400">
-                    {is100Percent ? '⚡ CRITICAL CORE SYNC COMPLETE' : `${completedHabitsCount} / ${totalHabitsCount} Target Units Operational`}
+                  <h3 className={`text-xs font-bold uppercase tracking-wider ${clsTextMuted}`}>Daily Habits Progress</h3>
+                  <p className={`text-xs font-semibold mt-0.5 transition-colors duration-300 ${is100Percent ? 'text-emerald-600 dark:text-emerald-400' : clsTextBody}`}>
+                    {is100Percent ? '🎉 All tasks finished!' : `${completedHabitsCount} of ${totalHabitsCount} tasks checked`}
                   </p>
                 </div>
 
-                {/* SVG Progress Ring */}
-                <div className="relative w-12 h-12">
+                {/* Minimalist Progress Meter Dial matching Screen Asset Specifications perfectly */}
+                <div className={`relative w-12 h-12 shrink-0 rounded-full p-0.5 transition-transform duration-500 ${is100Percent ? 'animate-bounce ring-4 ring-emerald-500/20' : 'hover:scale-105'}`}>
                   <svg className="w-full h-full transform -rotate-90" viewBox="0 0 40 40">
-                    <circle cx="20" cy="20" r="18" fill="transparent" stroke={isDarkMode ? '#334155' : '#e2e8f0'} strokeWidth="3.5" />
-                    <circle cx="20" cy="20" r="18" fill="transparent" stroke={is100Percent ? '#06b6d4' : '#10b981'} strokeWidth="3.5" 
-                      strokeDasharray="113.09" strokeDashoffset={strokeDashoffset} strokeLinecap="round" className="transition-all duration-300"
+                    <circle cx="20" cy="20" r="18" fill="transparent" stroke={circleTrackColor} strokeWidth="2.5" />
+                    <circle cx="20" cy="20" r="18" fill="transparent" stroke={circleProgressColor} strokeWidth="2.5" 
+                      strokeDasharray="113.09" strokeDashoffset={strokeDashoffset} strokeLinecap="round" className="transition-all duration-500 ease-out"
                     />
+                    {totalHabitsCount > 0 && (
+                      <circle 
+                        cx={targetIndicatorX} 
+                        cy={targetIndicatorY} 
+                        r="3.5" 
+                        fill={circleProgressColor} 
+                        className="transition-all duration-500 ease-out shadow-sm"
+                      />
+                    )}
                   </svg>
-                  <div className={`absolute inset-0 flex items-center justify-center text-[10px] font-black tracking-tight transition-transform ${is100Percent ? 'scale-110 text-cyan-400' : ''}`}>
+                  <div className={`absolute inset-0 flex items-center justify-center text-[10px] font-bold tracking-tight transition-all duration-300 ${is100Percent ? 'text-emerald-600 dark:text-emerald-400 font-extrabold scale-110' : clsTextMuted}`}>
                     {habitPercentage}%
                   </div>
                 </div>
               </div>
 
-              {/* Task Tracker Blocks */}
               {totalHabitsCount === 0 ? (
-                <p className="text-xs text-slate-400 italic">No discipline check tracks configured inside workspace.</p>
+                <p className={`text-xs ${clsTextMutedStrong} italic`}>No custom tracking habits configured. Open settings to manage tracked routines.</p>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {activeHabitsList.map((habit) => {
                     const isChecked = !!dayHabitsState[habit];
-                    const isPopping = quantumTriggerHabit === habit;
+                    const isPopping = lastCheckedHabit === habit;
                     
                     return (
-                      <div 
+                      <button
                         key={habit}
-                        className={`flex items-center justify-between gap-1 rounded-xl border transition-all duration-150 ${
-                          isPopping ? 'animate-quantum-hit' : ''
+                        type="button"
+                        onClick={() => handleToggleHabit(habit)}
+                        className={`flex items-center gap-3 w-full text-left text-xs p-2.5 rounded-lg border transition-all duration-300 transform active:scale-[0.97] ${
+                          isPopping ? 'scale-[0.98] border-indigo-400' : ''
                         } ${
                           isChecked 
-                            ? 'bg-emerald-500/10 border-emerald-500/40 text-slate-800 dark:text-emerald-400 shadow-sm' 
-                            : 'bg-transparent border-slate-700/10 text-slate-400 dark:border-slate-800 hover:border-slate-500/20'
+                            ? `${clsSubBg} ${isDarkMode ? 'border-zinc-700 text-zinc-200 bg-zinc-800/60' : 'border-indigo-100 bg-indigo-50/40 text-indigo-950'} font-bold shadow-inner` 
+                            : `bg-transparent ${isDarkMode ? 'border-zinc-800 hover:border-zinc-700' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'} ${clsTextBody}`
                         }`}
                       >
-                        {/* Toggle Check Trigger Frame */}
-                        <button
-                          type="button"
-                          onClick={() => handleToggleHabit(habit)}
-                          className="flex items-center gap-3 text-left text-xs p-3 flex-1 min-w-0"
-                        >
-                          <div className={`w-4 h-4 rounded-md border flex items-center justify-center text-[9px] font-black shrink-0 transition-all ${
-                            isChecked ? 'bg-emerald-500 border-emerald-500 text-white shadow-sm scale-105' : 'border-slate-400'
-                          }`}>
-                            {isChecked && '✓'}
-                          </div>
-                          <span className={`truncate font-medium ${isChecked ? 'line-through opacity-60' : ''}`}>{habit}</span>
-                        </button>
-
-                        {/* Isolated Habit Destruction Node */}
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteCustomHabit(habit)}
-                          className="text-slate-400 hover:text-rose-500 dark:hover:text-rose-400 p-3 text-xs font-bold transition-colors shrink-0"
-                          title="Purge track asset"
-                        >
-                          ✕
-                        </button>
-                      </div>
+                        <div className={`w-4 h-4 rounded border flex items-center justify-center text-[9px] shrink-0 transition-all duration-300 ${
+                          isChecked ? 'bg-indigo-500 border-indigo-500 text-white scale-110 rotate-[360deg]' : (isDarkMode ? 'border-zinc-600' : 'border-slate-300')
+                        }`}>
+                          {isChecked && '✓'}
+                        </div>
+                        <span className={`truncate transition-all duration-300 ${isChecked ? `line-through opacity-40 ${isDarkMode ? 'text-zinc-500' : 'text-slate-600'}` : ''}`}>{habit}</span>
+                      </button>
                     );
                   })}
                 </div>
               )}
-
-              {/* Habit Injection Substation */}
-              <form onSubmit={handleCreateCustomHabit} className="flex gap-2 border-t border-slate-700/10 pt-3 mt-2">
-                <input 
-                  type="text" required placeholder="➕ Add custom tracking habit (e.g. 8h Sleep)" value={newHabitName}
-                  onChange={(e) => setNewHabitName(e.target.value)}
-                  className={`${clsInput} border text-xs rounded-lg px-3 py-2.5 focus:outline-none w-full`}
-                />
-                <button type="submit" className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2 rounded-lg transition-colors shrink-0">
-                  Inject Track
-                </button>
-              </form>
             </div>
 
-            {/* Timelines Intake Panel Logs Layout */}
-            <div className={`${clsCard} border p-4 sm:p-5 rounded-xl shadow-sm`}>
-              <h3 className="text-sm font-bold mb-4 uppercase tracking-wider text-slate-400">Daily Meal Records Timeline</h3>
-              {mealTimes.map(timeWindow => {
+            {/* Meal Records Timeline Log Table Module */}
+            <div className={`${clsCard} border p-4 sm:p-5 rounded-xl`}>
+              <h3 className={`text-xs font-bold uppercase tracking-wider ${clsTextMutedStrong} mb-4`}>Meal History logs</h3>
+              {MEAL_TIMES.map(timeWindow => {
                 const mealsInWindow = currentDayData.meals.filter(m => m.mealTime === timeWindow);
                 return (
-                  <div key={timeWindow} className="mb-5 last:mb-0 border-b border-slate-700/20 last:border-0 pb-4 last:pb-0">
-                    <h4 className="text-xs font-bold text-blue-500 bg-blue-500/10 inline-block px-2.5 py-0.5 rounded-md mb-2">{timeWindow}</h4>
-                    {mealsInWindow.length === 0 ? <p className="text-xs text-slate-400 italic pl-1">No data logged for this window.</p> : (
-                      <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
-                        <table className="w-full text-left text-xs min-w-[420px]">
+                  <div key={timeWindow} className={`mb-4 last:mb-0 border-b ${isDarkMode ? 'border-zinc-800' : 'border-slate-200'} pb-3 last:pb-0`}>
+                    <h4 className={`text-xs font-semibold ${isDarkMode ? 'text-indigo-400 bg-indigo-950/20' : 'text-indigo-600 bg-indigo-50'} inline-block px-2 py-0.5 rounded mb-2`}>{timeWindow}</h4>
+                    {mealsInWindow.length === 0 ? <p className={`text-xs ${clsTextMutedStrong} italic pl-1`}>No foods logged for this window.</p> : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs min-w-[400px]">
                           <thead>
-                            <tr className="border-b border-slate-700/20 text-slate-400 uppercase font-semibold text-[10px]">
-                              <th className="py-2 pr-2">Item</th>
-                              <th className="py-2 px-2 text-center">Qty</th>
-                              <th className="py-2 px-2 text-right">Calories</th>
-                              <th className="py-2 px-2 text-right">P / C / F / Fib</th>
-                              <th className="py-2 pl-2 text-right">Action</th>
+                            <tr className={`border-b ${isDarkMode ? 'border-zinc-800 text-zinc-400' : 'border-slate-200 text-slate-800'} font-bold text-[10px] uppercase`}>
+                              <th className="py-1.5">Food Name</th>
+                              <th className="py-1.5 text-center">Amount</th>
+                              <th className="py-1.5 text-right">Calories</th>
+                              <th className="py-1.5 text-right">P / C / F / Fib</th>
+                              <th className="py-1.5 text-right">Action</th>
                             </tr>
                           </thead>
                           <tbody>
                             {mealsInWindow.map(item => (
-                              <tr key={item.id} className="border-b border-slate-700/10 hover:bg-slate-500/5 transition-colors">
-                                <td className="py-2.5 pr-2 font-medium max-w-[140px] truncate">{item.name}</td>
-                                <td className="py-2.5 px-2 text-center font-bold"><span className="bg-slate-500/10 px-1.5 py-0.5 rounded text-[11px]">{item.servings}x</span></td>
-                                <td className="py-2.5 px-2 text-right font-semibold">{Math.round(item.calories * item.servings)} kcal</td>
-                                <td className="py-2.5 px-2 text-right tracking-tight text-slate-400">{(item.protein * item.servings).toFixed(1)}g / {(item.carbs * item.servings).toFixed(1)}g / {(item.fat * item.servings).toFixed(1)}g / {(item.fiber * item.servings).toFixed(1)}g</td>
-                                <td className="py-2.5 pl-2 text-right"><button type="button" onClick={() => handleDeleteLoggedFood(item.id)} className="text-rose-500 hover:text-rose-400 font-bold px-1.5 text-sm">✕</button></td>
+                              <tr key={item.id} className={`border-b ${isDarkMode ? 'border-zinc-800/20 text-zinc-300' : 'border-slate-100 text-slate-800'} transition-colors duration-150`}>
+                                <td className={`py-2 font-medium max-w-[150px] truncate ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{item.name}</td>
+                                <td className={`py-2 text-center ${clsTextMutedStrong}`}>{item.servings}x</td>
+                                <td className={`py-2 text-right font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{Math.round(item.calories * item.servings)} kcal</td>
+                                <td className={`py-2 text-right ${clsTextMutedStrong} text-[11px]`}>{(item.protein * item.servings).toFixed(1)}g / {(item.carbs * item.servings).toFixed(1)}g / {(item.fat * item.servings).toFixed(1)}g / {(item.fiber * item.servings).toFixed(1)}g</td>
+                                <td className="py-2 text-right"><button type="button" onClick={() => handleDeleteLoggedFood(item.id)} className="text-slate-400 hover:text-rose-500 font-medium px-2 transition-colors">✕</button></td>
                               </tr>
                             ))}
                           </tbody>
@@ -684,9 +729,96 @@ export default function MultiUserDietTracker() {
             </div>
 
           </div>
-
         </section>
       </main>
+
+      {/* Account Settings Overlay Drawer Modal */}
+      {showSettings && (
+        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-3 bg-slate-900/40 dark:bg-zinc-950/80 backdrop-blur-sm">
+          <div className={`w-full max-w-2xl rounded-xl border p-5 shadow-xl relative ${isDarkMode ? 'bg-zinc-900 border-zinc-800 text-zinc-100' : 'bg-white border-slate-200 text-slate-900'}`}>
+            
+            <div className={`flex justify-between items-center border-b ${isDarkMode ? 'border-zinc-800' : 'border-slate-200'} pb-3 mb-5`}>
+              <div>
+                <h2 className={`text-base font-bold ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Settings & Customization</h2>
+                <p className={`text-xs ${isDarkMode ? 'text-zinc-400' : 'text-slate-700'}`}>Configure your custom foods list and daily habits check-list</p>
+              </div>
+              <button type="button" onClick={() => setShowSettings(false)} className={`text-xs px-3 py-1.5 rounded-lg border ${isDarkMode ? 'border-zinc-700 bg-zinc-800 text-zinc-300' : 'border-slate-300 bg-slate-50 text-slate-800'} font-medium hover:bg-slate-100`}>
+                ✕ Close
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              
+              {/* Form Component: Custom Food Creator */}
+              <div className="space-y-4">
+                <h4 className={`text-xs font-bold uppercase tracking-wider ${isDarkMode ? 'text-indigo-400 border-zinc-800' : 'text-indigo-600 border-slate-200'} pb-1 border-b`}>Custom Foods</h4>
+                <form onSubmit={handleCreateCustomFood} className="space-y-3">
+                  <div>
+                    <label className={`block text-[10px] font-bold ${isDarkMode ? 'text-zinc-400' : 'text-slate-700'} uppercase`}>Food Name</label>
+                    <input type="text" required placeholder="e.g. Protein Bar" value={newFoodName} onChange={(e) => setNewFoodName(e.target.value)} className={`${clsInput} border w-full text-xs rounded-lg p-2 mt-1 focus:outline-none placeholder-slate-400`}/>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className={`block text-[10px] font-medium ${isDarkMode ? 'text-zinc-400' : 'text-slate-700'}`}>Calories (kcal)</label>
+                      <input type="number" min="0" value={newFoodCal} onChange={(e) => setNewFoodCal(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))} className={`${clsInput} border w-full text-xs rounded-lg p-2`}/>
+                    </div>
+                    <div>
+                      <label className={`block text-[10px] font-medium ${isDarkMode ? 'text-zinc-400' : 'text-slate-700'}`}>Protein (g)</label>
+                      <input type="number" step="0.1" min="0" value={newFoodProt} onChange={(e) => setNewFoodProt(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))} className={`${clsInput} border w-full text-xs rounded-lg p-2`}/>
+                    </div>
+                    <div>
+                      <label className={`block text-[10px] font-medium ${isDarkMode ? 'text-zinc-400' : 'text-slate-700'}`}>Carbs (g)</label>
+                      <input type="number" step="0.1" min="0" value={newFoodCarb} onChange={(e) => setNewFoodCarb(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))} className={`${clsInput} border w-full text-xs rounded-lg p-2`}/>
+                    </div>
+                    <div>
+                      <label className={`block text-[10px] font-medium ${isDarkMode ? 'text-zinc-400' : 'text-slate-700'}`}>Fat (g)</label>
+                      <input type="number" step="0.1" min="0" value={newFoodFat} onChange={(e) => setNewFoodFat(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))} className={`${clsInput} border w-full text-xs rounded-lg p-2`}/>
+                    </div>
+                  </div>
+                  <div>
+                    <label className={`block text-[10px] font-medium ${isDarkMode ? 'text-zinc-400' : 'text-slate-700'}`}>Fiber (g)</label>
+                    <input type="number" step="0.1" min="0" value={newFoodFib} onChange={(e) => setNewFoodFib(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))} className={`${clsInput} border w-full text-xs rounded-lg p-2`}/>
+                  </div>
+                  <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold py-2 rounded-lg transition-all active:scale-95">
+                    Add to Foods Options List
+                  </button>
+                </form>
+              </div>
+
+              {/* Form Segment Block: Manage Habits List Protocols */}
+              <div className="space-y-4 flex flex-col justify-between">
+                <div>
+                  <h4 className={`text-xs font-bold uppercase tracking-wider ${isDarkMode ? 'text-indigo-400 border-zinc-800' : 'text-indigo-600 border-slate-200'} pb-1 border-b`}>Tracked Habits</h4>
+                  
+                  <div className="space-y-1 max-h-[160px] overflow-y-auto pr-1 mt-2">
+                    {activeHabitsList.map(habit => (
+                      <div key={habit} className={`${clsSubBg} border text-xs px-2.5 py-1.5 rounded-lg flex justify-between items-center ${isDarkMode ? 'text-zinc-200' : 'text-slate-800'} font-semibold`}>
+                        <span className="truncate">{habit}</span>
+                        <button type="button" onClick={() => handleDeleteCustomHabit(habit)} className="text-slate-600 hover:text-rose-500 font-semibold text-xs px-2 py-0.5 transition-colors">
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <form onSubmit={handleCreateCustomHabit} className={`space-y-2 pt-3 border-t ${isDarkMode ? 'border-zinc-800' : 'border-slate-200'}`}>
+                  <label className={`block text-[10px] font-bold ${isDarkMode ? 'text-zinc-400' : 'text-slate-700'} uppercase tracking-wider`}>Add a New Habit</label>
+                  <div className="flex gap-2">
+                    <input type="text" required placeholder="e.g. 💤 8 Hours Sleep Cycle" value={newHabitName} onChange={(e) => setNewHabitName(e.target.value)} className={`${clsInput} border text-xs rounded-lg px-3 py-2 w-full focus:outline-none placeholder-slate-400`}/>
+                    <button type="submit" className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-4 py-2 rounded-lg transition-all active:scale-95 shrink-0">
+                      Add Habit
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+            </div>
+
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
