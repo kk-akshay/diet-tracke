@@ -32,6 +32,7 @@ export interface UserProfileData {
   defaultTarget: number;
   weeklyTargets: { [mondayDateStr: string]: number };
   habitsList: string[];
+  customFoods: FoodItem[];
   logs: { [dateStr: string]: DayLog };
 }
 

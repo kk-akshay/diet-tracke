@@ -30,6 +30,30 @@ function getWeekMonday(dateStr: string): string {
   return monday.toISOString().split('T')[0];
 }
 
+// YYYY-MM key used to group logs into calendar months
+function getMonthKey(dateStr: string): string {
+  if (!dateStr) return '';
+  return dateStr.slice(0, 7);
+}
+
+function formatMonthLabel(monthKey: string): string {
+  if (!monthKey) return '';
+  const [y, m] = monthKey.split('-').map(Number);
+  const d = new Date(y, m - 1, 1);
+  return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+function shiftMonth(monthKey: string, delta: number): string {
+  const [y, m] = monthKey.split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function formatShortDate(dateStr: string): string {
+  const d = new Date(dateStr + 'T00:00:00');
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
 export default function MultiUserDietTracker() {
   // ==========================================
   // 1. COMPONENT REACT STATES (Initialized First)
@@ -41,6 +65,9 @@ export default function MultiUserDietTracker() {
   const [mounted, setMounted] = useState(false);
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [showMenu, setShowMenu] = useState<boolean>(false);
+  const [activeTab, setActiveTab] = useState<'daily' | 'history' | 'monthly'>('daily');
+  const [selectedMonth, setSelectedMonth] = useState<string>('');
+  const [historySearch, setHistorySearch] = useState<string>('');
 
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
   const [loginUsername, setLoginUsername] = useState('');
@@ -49,7 +76,9 @@ export default function MultiUserDietTracker() {
   const [regPasscode, setRegPasscode] = useState('');
   const [regDefaultTarget, setRegDefaultTarget] = useState<number | ''>(2500);
 
-  const [customFoods, setCustomFoods] = useState<FoodItem[]>([]);
+  // customFoods now lives on the cloud profile (userProfile.customFoods) so it
+  // follows the user across devices instead of being stuck in this browser's localStorage.
+  const [migratingLocalFoods, setMigratingLocalFoods] = useState<boolean>(false);
   const [selectedMealTime, setSelectedMealTime] = useState<MealTime>('Breakfast');
   const [selectedFoodIndex, setSelectedFoodIndex] = useState<number>(0);
   
@@ -109,6 +138,7 @@ export default function MultiUserDietTracker() {
       defaultTarget: targetFloor,
       weeklyTargets: {},
       habitsList: [...DEFAULT_HABITS], 
+      customFoods: [],
       logs: {}
     };
 
@@ -243,7 +273,9 @@ export default function MultiUserDietTracker() {
 
   function handleCreateCustomFood(e: React.FormEvent) {
     e.preventDefault();
-    if (!newFoodName.trim()) return;
+    if (!newFoodName.trim() || !currentUser || !db[currentUser]) return;
+    const currentProfile = db[currentUser];
+    const existingCustomFoods = currentProfile.customFoods || [];
 
     const customFoodAsset: FoodItem = {
       name: newFoodName,
@@ -254,9 +286,22 @@ export default function MultiUserDietTracker() {
       fiber: newFoodFib === '' ? 0 : Math.max(0, newFoodFib)
     };
 
-    setCustomFoods(prev => [...prev, customFoodAsset]);
+    setDb(prev => ({
+      ...prev,
+      [currentUser]: { ...currentProfile, customFoods: [...existingCustomFoods, customFoodAsset] }
+    }));
     setNewFoodName(''); setNewFoodCal(0); setNewFoodProt(0); setNewFoodCarb(0); setNewFoodFat(0); setNewFoodFib(0);
-    alert(`"${customFoodAsset.name}" has been added to your available foods.`);
+    alert(`"${customFoodAsset.name}" has been added to your account and will sync to all your devices.`);
+  }
+
+  function handleDeleteCustomFood(index: number) {
+    if (!currentUser || !db[currentUser]) return;
+    const currentProfile = db[currentUser];
+    const existingCustomFoods = currentProfile.customFoods || [];
+    const updatedCustomFoods = existingCustomFoods.filter((_, i) => i !== index);
+    setDb(prev => ({ ...prev, [currentUser]: { ...currentProfile, customFoods: updatedCustomFoods } }));
+    // Keep the currently selected dropdown food item pointing somewhere valid
+    setSelectedFoodIndex(0);
   }
 
   function handleDeleteLoggedFood(id: string) {
@@ -296,7 +341,7 @@ export default function MultiUserDietTracker() {
   const currentWeekMonday = getWeekMonday(selectedDate);
   const activeWeeklyTarget = userProfile ? (userProfile.weeklyTargets[currentWeekMonday] || userProfile.defaultTarget) : 2500;
   const currentDayData: DayLog = (userProfile && userProfile.logs[selectedDate]) ? userProfile.logs[selectedDate] : INITIAL_DAY_LOG();
-  const combinedFoodList = [...FIXED_FOODS, ...customFoods];
+  const combinedFoodList = [...FIXED_FOODS, ...(userProfile?.customFoods || [])];
   const activeHabitsList = userProfile?.habitsList || [...DEFAULT_HABITS];
   const dayHabitsState = currentDayData.habits || {};
 
@@ -331,15 +376,112 @@ export default function MultiUserDietTracker() {
     : (isDarkMode ? '#b4b6f9' : '#818cf8');
 
   // ==========================================
+  // 3b. HISTORY VIEW (all logged dates, newest first)
+  // ==========================================
+  type HistoryRow = {
+    date: string;
+    calories: number;
+    protein: number;
+    carbs: number;
+    fat: number;
+    fiber: number;
+    weight: string;
+    mealsCount: number;
+    habitPct: number;
+    target: number;
+  };
+
+  const historyRows: HistoryRow[] = userProfile
+    ? Object.keys(userProfile.logs)
+        .sort((a, b) => (a < b ? 1 : -1))
+        .map((dateKey) => {
+          const log = userProfile.logs[dateKey];
+          const dayTotals = (log.meals || []).reduce((acc, item) => {
+            acc.calories += item.calories * item.servings;
+            acc.protein += item.protein * item.servings;
+            acc.carbs += item.carbs * item.servings;
+            acc.fat += item.fat * item.servings;
+            acc.fiber += item.fiber * item.servings;
+            return acc;
+          }, { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
+          const habitsForDay = userProfile.habitsList || DEFAULT_HABITS;
+          const dayHabits = log.habits || {};
+          const doneCount = habitsForDay.filter(h => dayHabits[h]).length;
+          const pct = habitsForDay.length > 0 ? Math.round((doneCount / habitsForDay.length) * 100) : 0;
+          return {
+            date: dateKey,
+            calories: dayTotals.calories,
+            protein: dayTotals.protein,
+            carbs: dayTotals.carbs,
+            fat: dayTotals.fat,
+            fiber: dayTotals.fiber,
+            weight: log.weight,
+            mealsCount: (log.meals || []).length,
+            habitPct: pct,
+            target: userProfile.weeklyTargets[getWeekMonday(dateKey)] || userProfile.defaultTarget,
+          };
+        })
+    : [];
+
+  const filteredHistoryRows = historySearch.trim()
+    ? historyRows.filter(r => r.date.includes(historySearch.trim()))
+    : historyRows;
+
+  // ==========================================
+  // 3c. MONTHLY ANALYSIS (aggregates for selectedMonth)
+  // ==========================================
+  const monthRows = historyRows
+    .filter(r => getMonthKey(r.date) === selectedMonth)
+    .sort((a, b) => (a.date < b.date ? -1 : 1));
+
+  const daysLoggedInMonth = monthRows.length;
+  const monthAvg = (key: 'calories' | 'protein' | 'carbs' | 'fat' | 'fiber') =>
+    daysLoggedInMonth > 0 ? monthRows.reduce((sum, r) => sum + r[key], 0) / daysLoggedInMonth : 0;
+
+  const monthAvgCalories = monthAvg('calories');
+  const monthAvgProtein = monthAvg('protein');
+  const monthAvgCarbs = monthAvg('carbs');
+  const monthAvgFat = monthAvg('fat');
+  const monthAvgFiber = monthAvg('fiber');
+
+  const monthAvgHabitPct = daysLoggedInMonth > 0
+    ? Math.round(monthRows.reduce((sum, r) => sum + r.habitPct, 0) / daysLoggedInMonth)
+    : 0;
+
+  const daysOnTarget = monthRows.filter(r => r.target > 0 && r.calories <= r.target).length;
+  const adherencePct = daysLoggedInMonth > 0 ? Math.round((daysOnTarget / daysLoggedInMonth) * 100) : 0;
+
+  const monthWeights = monthRows
+    .map(r => ({ date: r.date, weight: parseFloat(r.weight) }))
+    .filter(w => !isNaN(w.weight) && w.weight > 0);
+  const startWeight = monthWeights.length > 0 ? monthWeights[0].weight : null;
+  const endWeight = monthWeights.length > 0 ? monthWeights[monthWeights.length - 1].weight : null;
+  const weightDelta = startWeight !== null && endWeight !== null ? endWeight - startWeight : null;
+
+  const highestCalorieDay = monthRows.length > 0
+    ? monthRows.reduce((a, b) => (b.calories > a.calories ? b : a))
+    : null;
+  const lowestCalorieDay = monthRows.length > 0
+    ? monthRows.reduce((a, b) => (b.calories < a.calories ? b : a))
+    : null;
+
+  const monthChartMax = Math.max(
+    monthAvgCalories > 0 ? monthAvgCalories : 0,
+    ...monthRows.map(r => r.calories),
+    ...monthRows.map(r => r.target),
+    1
+  );
+
+  // ==========================================
   // 4. DATA SYNCHRONIZATION LIFECYCLES
   // ==========================================
   useEffect(() => {
-    setSelectedDate(new Date().toISOString().split('T')[0]);
-    const savedCustom = localStorage.getItem('macrosync_custom_foods');
+    const todayStr = new Date().toISOString().split('T')[0];
+    setSelectedDate(todayStr);
+    setSelectedMonth(getMonthKey(todayStr));
     const savedTheme = localStorage.getItem('macrosync_theme');
     const savedSession = localStorage.getItem('macrosync_active_session');
 
-    if (savedCustom) setCustomFoods(JSON.parse(savedCustom));
     if (savedTheme) setIsDarkMode(savedTheme === 'dark');
     
     if (savedSession) {
@@ -349,9 +491,36 @@ export default function MultiUserDietTracker() {
     setMounted(true);
   }, []);
 
+  // One-time migration: older versions of this app stored custom foods in this
+  // browser's localStorage only. Once the cloud profile has loaded, pull any
+  // leftover local foods into the account so they sync across devices, then
+  // clear the local copy so this only ever runs once per browser.
   useEffect(() => {
-    if (mounted) localStorage.setItem('macrosync_custom_foods', JSON.stringify(customFoods));
-  }, [customFoods, mounted]);
+    if (!mounted || !currentUser || !db[currentUser] || migratingLocalFoods) return;
+    const legacyRaw = localStorage.getItem('macrosync_custom_foods');
+    if (!legacyRaw) return;
+
+    try {
+      const legacyFoods: FoodItem[] = JSON.parse(legacyRaw);
+      if (Array.isArray(legacyFoods) && legacyFoods.length > 0) {
+        setMigratingLocalFoods(true);
+        const currentProfile = db[currentUser];
+        const existingNames = new Set((currentProfile.customFoods || []).map(f => f.name));
+        const newOnes = legacyFoods.filter(f => !existingNames.has(f.name));
+        if (newOnes.length > 0) {
+          setDb(prev => ({
+            ...prev,
+            [currentUser]: { ...currentProfile, customFoods: [...(currentProfile.customFoods || []), ...newOnes] }
+          }));
+          alert(`Migrated ${newOnes.length} custom food(s) from this device into your account. They'll now be available on all your devices.`);
+        }
+      }
+    } catch {
+      // Ignore malformed legacy data
+    } finally {
+      localStorage.removeItem('macrosync_custom_foods');
+    }
+  }, [mounted, currentUser, db, migratingLocalFoods]);
 
   useEffect(() => {
     if (mounted && currentUser && db[currentUser]) {
@@ -533,6 +702,30 @@ export default function MultiUserDietTracker() {
           </div>
         </header>
 
+        {/* View Switcher Tab Navigation */}
+        <div className={`${clsCard} border p-1.5 rounded-xl flex gap-1`}>
+          {([
+            { key: 'daily', label: '📋 Daily Log' },
+            { key: 'history', label: '🗂️ History' },
+            { key: 'monthly', label: '📊 Monthly Analysis' },
+          ] as { key: 'daily' | 'history' | 'monthly'; label: string }[]).map(tab => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setActiveTab(tab.key)}
+              className={`flex-1 text-center text-xs sm:text-sm font-bold px-2 sm:px-4 py-2 rounded-lg transition-all ${
+                activeTab === tab.key
+                  ? (isDarkMode ? 'bg-zinc-800 text-white shadow-sm' : 'bg-zinc-900 text-white shadow-sm')
+                  : (isDarkMode ? 'text-zinc-400 hover:bg-zinc-800/50' : 'text-slate-600 hover:bg-slate-100')
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {activeTab === 'daily' && (
+        <>
         {/* Weekly Targets Section */}
         <section className={`${clsCard} border p-4 sm:p-5 rounded-xl flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4`}>
           <div className="text-xs sm:text-sm w-full lg:w-auto">
@@ -730,6 +923,182 @@ export default function MultiUserDietTracker() {
 
           </div>
         </section>
+        </>
+        )}
+
+        {activeTab === 'history' && (
+          <section className={`${clsCard} border p-4 sm:p-5 rounded-xl`}>
+            <div className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 border-b pb-3 ${isDarkMode ? 'border-zinc-800' : 'border-slate-200'}`}>
+              <div>
+                <h3 className={`text-xs font-bold uppercase tracking-wider ${clsTextMuted}`}>Logged Days History</h3>
+                <p className={`text-xs ${clsTextMutedStrong} mt-0.5`}>Every date you've recorded data for. Tap a row to jump to that day.</p>
+              </div>
+              <input
+                type="text"
+                placeholder="Filter by date (YYYY-MM-DD)"
+                value={historySearch}
+                onChange={(e) => setHistorySearch(e.target.value)}
+                className={`${clsInput} border text-xs rounded-lg px-3 py-2 w-full sm:w-56 focus:outline-none placeholder-slate-400`}
+              />
+            </div>
+
+            {filteredHistoryRows.length === 0 ? (
+              <p className={`text-xs ${clsTextMutedStrong} italic`}>No logged days found yet. Start logging meals to build your history.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs min-w-[640px]">
+                  <thead>
+                    <tr className={`border-b ${isDarkMode ? 'border-zinc-800 text-zinc-400' : 'border-slate-200 text-slate-800'} font-bold text-[10px] uppercase`}>
+                      <th className="py-2">Date</th>
+                      <th className="py-2 text-right">Calories</th>
+                      <th className="py-2 text-right">Target</th>
+                      <th className="py-2 text-right">P / C / F / Fib</th>
+                      <th className="py-2 text-right">Weight</th>
+                      <th className="py-2 text-right">Meals</th>
+                      <th className="py-2 text-right">Habits</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredHistoryRows.map(row => (
+                      <tr
+                        key={row.date}
+                        onClick={() => { setSelectedDate(row.date); setActiveTab('daily'); }}
+                        className={`border-b cursor-pointer transition-colors duration-150 ${isDarkMode ? 'border-zinc-800/20 text-zinc-300 hover:bg-zinc-800/40' : 'border-slate-100 text-slate-800 hover:bg-slate-50'} ${row.date === selectedDate ? (isDarkMode ? 'bg-zinc-800/60' : 'bg-indigo-50/50') : ''}`}
+                      >
+                        <td className={`py-2 font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{row.date}</td>
+                        <td className={`py-2 text-right font-bold ${row.calories > row.target ? (isDarkMode ? 'text-indigo-300' : 'text-indigo-600') : ''}`}>{Math.round(row.calories)} kcal</td>
+                        <td className={`py-2 text-right ${clsTextMutedStrong}`}>{row.target} kcal</td>
+                        <td className={`py-2 text-right ${clsTextMutedStrong} text-[11px]`}>{row.protein.toFixed(0)}g / {row.carbs.toFixed(0)}g / {row.fat.toFixed(0)}g / {row.fiber.toFixed(0)}g</td>
+                        <td className={`py-2 text-right ${clsTextMutedStrong}`}>{row.weight || '—'} kg</td>
+                        <td className={`py-2 text-right ${clsTextMutedStrong}`}>{row.mealsCount}</td>
+                        <td className="py-2 text-right">
+                          <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${row.habitPct === 100 ? 'bg-emerald-100 text-emerald-700' : row.habitPct === 0 ? (isDarkMode ? 'bg-zinc-800 text-zinc-400' : 'bg-slate-100 text-slate-500') : 'bg-amber-100 text-amber-700'}`}>{row.habitPct}%</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        )}
+
+        {activeTab === 'monthly' && (
+          <section className="space-y-4 sm:space-y-6">
+            <div className={`${clsCard} border p-4 sm:p-5 rounded-xl flex items-center justify-between`}>
+              <button type="button" onClick={() => setSelectedMonth(shiftMonth(selectedMonth, -1))} className={`text-xs font-bold px-3 py-1.5 rounded-lg border ${isDarkMode ? 'border-zinc-700 bg-zinc-800 text-zinc-300 hover:bg-zinc-700' : 'border-slate-300 bg-slate-50 text-slate-800 hover:bg-slate-100'}`}>← Prev</button>
+              <h3 className={`text-sm font-bold ${clsTextTitle}`}>{formatMonthLabel(selectedMonth)}</h3>
+              <button type="button" onClick={() => setSelectedMonth(shiftMonth(selectedMonth, 1))} className={`text-xs font-bold px-3 py-1.5 rounded-lg border ${isDarkMode ? 'border-zinc-700 bg-zinc-800 text-zinc-300 hover:bg-zinc-700' : 'border-slate-300 bg-slate-50 text-slate-800 hover:bg-slate-100'}`}>Next →</button>
+            </div>
+
+            {daysLoggedInMonth === 0 ? (
+              <div className={`${clsCard} border p-6 rounded-xl text-center`}>
+                <p className={`text-xs ${clsTextMutedStrong} italic`}>No entries logged for {formatMonthLabel(selectedMonth)} yet.</p>
+              </div>
+            ) : (
+              <>
+                {/* Monthly Summary Cards */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+                  <div className={`${clsCard} border p-3 sm:p-4 rounded-xl`}>
+                    <span className={`block text-[10px] font-bold uppercase ${clsTextMuted}`}>Days Logged</span>
+                    <strong className={`text-xl font-bold ${clsTextTitle}`}>{daysLoggedInMonth}</strong>
+                  </div>
+                  <div className={`${clsCard} border p-3 sm:p-4 rounded-xl`}>
+                    <span className={`block text-[10px] font-bold uppercase ${clsTextMuted}`}>Avg Calories</span>
+                    <strong className={`text-xl font-bold ${clsTextTitle}`}>{Math.round(monthAvgCalories)}</strong>
+                  </div>
+                  <div className={`${clsCard} border p-3 sm:p-4 rounded-xl`}>
+                    <span className={`block text-[10px] font-bold uppercase ${clsTextMuted}`}>On-Target Days</span>
+                    <strong className={`text-xl font-bold ${clsTextTitle}`}>{adherencePct}%</strong>
+                  </div>
+                  <div className={`${clsCard} border p-3 sm:p-4 rounded-xl`}>
+                    <span className={`block text-[10px] font-bold uppercase ${clsTextMuted}`}>Avg Habits</span>
+                    <strong className={`text-xl font-bold ${clsTextTitle}`}>{monthAvgHabitPct}%</strong>
+                  </div>
+                </div>
+
+                {/* Macro Averages + Weight Trend */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+                  <div className={`${clsCard} border p-4 sm:p-5 rounded-xl`}>
+                    <h4 className={`text-xs font-bold uppercase tracking-wider ${clsTextMuted} mb-3`}>Average Daily Macros</h4>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className={`${clsSubBg} border p-2 rounded-lg`}><span className={`block text-[10px] ${clsTextMutedStrong} font-bold`}>Protein</span><strong className={`text-sm font-semibold ${clsTextTitle}`}>{monthAvgProtein.toFixed(1)}g</strong></div>
+                      <div className={`${clsSubBg} border p-2 rounded-lg`}><span className={`block text-[10px] ${clsTextMutedStrong} font-bold`}>Carbs</span><strong className={`text-sm font-semibold ${clsTextTitle}`}>{monthAvgCarbs.toFixed(1)}g</strong></div>
+                      <div className={`${clsSubBg} border p-2 rounded-lg`}><span className={`block text-[10px] ${clsTextMutedStrong} font-bold`}>Fats</span><strong className={`text-sm font-semibold ${clsTextTitle}`}>{monthAvgFat.toFixed(1)}g</strong></div>
+                      <div className={`${clsSubBg} border p-2 rounded-lg`}><span className={`block text-[10px] ${clsTextMutedStrong} font-bold`}>Fiber</span><strong className={`text-sm font-semibold ${clsTextTitle}`}>{monthAvgFiber.toFixed(1)}g</strong></div>
+                    </div>
+                  </div>
+
+                  <div className={`${clsCard} border p-4 sm:p-5 rounded-xl`}>
+                    <h4 className={`text-xs font-bold uppercase tracking-wider ${clsTextMuted} mb-3`}>Weight Trend</h4>
+                    {startWeight === null ? (
+                      <p className={`text-xs ${clsTextMutedStrong} italic`}>No weight entries logged this month.</p>
+                    ) : (
+                      <div className="flex items-center gap-4 text-xs">
+                        <div><span className={`block text-[10px] ${clsTextMutedStrong} font-bold`}>Start</span><strong className={`text-sm font-semibold ${clsTextTitle}`}>{startWeight.toFixed(1)} kg</strong></div>
+                        <div className={isDarkMode ? 'text-zinc-700' : 'text-slate-300'}>→</div>
+                        <div><span className={`block text-[10px] ${clsTextMutedStrong} font-bold`}>End</span><strong className={`text-sm font-semibold ${clsTextTitle}`}>{endWeight!.toFixed(1)} kg</strong></div>
+                        <div className={`ml-auto px-2.5 py-1 rounded-full text-[11px] font-bold ${weightDelta! > 0 ? 'bg-indigo-50 text-indigo-700' : weightDelta! < 0 ? 'bg-emerald-50 text-emerald-700' : (isDarkMode ? 'bg-zinc-800 text-zinc-400' : 'bg-slate-100 text-slate-600')}`}>
+                          {weightDelta! > 0 ? '+' : ''}{weightDelta!.toFixed(1)} kg
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Daily Calories Bar Chart */}
+                <div className={`${clsCard} border p-4 sm:p-5 rounded-xl`}>
+                  <h4 className={`text-xs font-bold uppercase tracking-wider ${clsTextMuted} mb-4`}>Daily Calories vs Target</h4>
+                  <div className="overflow-x-auto">
+                    <div className="flex items-end gap-1.5 h-40 min-w-max px-1">
+                      {monthRows.map(row => {
+                        const barHeightPct = Math.max(2, Math.round((row.calories / monthChartMax) * 100));
+                        const targetHeightPct = Math.max(0, Math.round((row.target / monthChartMax) * 100));
+                        const over = row.calories > row.target;
+                        return (
+                          <div key={row.date} className="relative flex flex-col items-center justify-end h-full w-6 shrink-0 group">
+                            <div
+                              className={`absolute w-full border-t-2 border-dashed ${isDarkMode ? 'border-zinc-600' : 'border-slate-300'}`}
+                              style={{ bottom: `${targetHeightPct}%` }}
+                            />
+                            <div
+                              onClick={() => { setSelectedDate(row.date); setActiveTab('daily'); }}
+                              title={`${row.date}: ${Math.round(row.calories)} kcal`}
+                              className={`w-full rounded-t-sm cursor-pointer transition-all duration-200 ${over ? 'bg-indigo-500 group-hover:bg-indigo-600' : 'bg-emerald-400 group-hover:bg-emerald-500'}`}
+                              style={{ height: `${barHeightPct}%` }}
+                            />
+                            <span className={`text-[8px] mt-1 rotate-0 ${clsTextMutedStrong}`}>{row.date.slice(8, 10)}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4 mt-3 text-[10px] font-semibold">
+                    <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-emerald-400 inline-block" /> <span className={clsTextMutedStrong}>Within target</span></div>
+                    <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-indigo-500 inline-block" /> <span className={clsTextMutedStrong}>Over target</span></div>
+                    <div className="flex items-center gap-1.5"><span className={`w-3 border-t-2 border-dashed inline-block ${isDarkMode ? 'border-zinc-600' : 'border-slate-300'}`} /> <span className={clsTextMutedStrong}>Daily goal line</span></div>
+                  </div>
+                </div>
+
+                {/* Best / Worst Day Callouts */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+                  {highestCalorieDay && (
+                    <div className={`${clsCard} border p-4 rounded-xl`}>
+                      <span className={`block text-[10px] font-bold uppercase ${clsTextMuted}`}>Highest Intake Day</span>
+                      <p className={`text-sm font-bold mt-1 ${clsTextTitle}`}>{formatShortDate(highestCalorieDay.date)} · {Math.round(highestCalorieDay.calories)} kcal</p>
+                    </div>
+                  )}
+                  {lowestCalorieDay && (
+                    <div className={`${clsCard} border p-4 rounded-xl`}>
+                      <span className={`block text-[10px] font-bold uppercase ${clsTextMuted}`}>Lowest Intake Day</span>
+                      <p className={`text-sm font-bold mt-1 ${clsTextTitle}`}>{formatShortDate(lowestCalorieDay.date)} · {Math.round(lowestCalorieDay.calories)} kcal</p>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </section>
+        )}
       </main>
 
       {/* Account Settings Overlay Drawer Modal */}
@@ -751,7 +1120,21 @@ export default function MultiUserDietTracker() {
               
               {/* Form Component: Custom Food Creator */}
               <div className="space-y-4">
-                <h4 className={`text-xs font-bold uppercase tracking-wider ${isDarkMode ? 'text-indigo-400 border-zinc-800' : 'text-indigo-600 border-slate-200'} pb-1 border-b`}>Custom Foods</h4>
+                <h4 className={`text-xs font-bold uppercase tracking-wider ${isDarkMode ? 'text-indigo-400 border-zinc-800' : 'text-indigo-600 border-slate-200'} pb-1 border-b`}>Custom Foods <span className="normal-case font-medium opacity-70">(synced to your account)</span></h4>
+
+                {(userProfile.customFoods && userProfile.customFoods.length > 0) && (
+                  <div className="space-y-1 max-h-[120px] overflow-y-auto pr-1">
+                    {userProfile.customFoods.map((food, idx) => (
+                      <div key={`${food.name}-${idx}`} className={`${clsSubBg} border text-xs px-2.5 py-1.5 rounded-lg flex justify-between items-center ${isDarkMode ? 'text-zinc-200' : 'text-slate-800'} font-semibold`}>
+                        <span className="truncate">{food.name} <span className={`font-normal ${clsTextMutedStrong}`}>({food.calories} kcal)</span></span>
+                        <button type="button" onClick={() => handleDeleteCustomFood(idx)} className="text-slate-600 hover:text-rose-500 font-semibold text-xs px-2 py-0.5 transition-colors shrink-0">
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 <form onSubmit={handleCreateCustomFood} className="space-y-3">
                   <div>
                     <label className={`block text-[10px] font-bold ${isDarkMode ? 'text-zinc-400' : 'text-slate-700'} uppercase`}>Food Name</label>
